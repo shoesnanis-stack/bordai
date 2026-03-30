@@ -118,7 +118,7 @@ export async function POST(request: Request) {
   const hoop = HOOP_SIZES[project.hoop_size as HoopSize]
   const digitization = vectorized?.metadata ?? {}
 
-  // Get signed URL for the original image so Python can download it
+  // Download image from Supabase storage to a temp file for Python
   const { data: originalFile } = await admin
     .from('project_files')
     .select('storage_path')
@@ -126,12 +126,41 @@ export async function POST(request: Request) {
     .eq('file_type', 'original')
     .single()
 
+  let imagePath: string | undefined
   let imageUrl: string | undefined
+
   if (originalFile) {
-    const { data: signed } = await admin.storage
-      .from('project-files')
-      .createSignedUrl(originalFile.storage_path, 300) // 5 min for Python to download
-    imageUrl = signed?.signedUrl
+    // Method 1: Direct download to temp file (most reliable)
+    try {
+      const { data: blob, error: dlError } = await admin.storage
+        .from('project-files')
+        .download(originalFile.storage_path)
+
+      if (blob && !dlError) {
+        imagePath = join(tmpdir(), `bordai_img_${Date.now()}.png`)
+        const imgBuffer = Buffer.from(await blob.arrayBuffer())
+        await writeFile(imagePath, imgBuffer)
+        console.log(`[GENERATE] Image saved to temp: ${imagePath} (${imgBuffer.length} bytes)`)
+      } else {
+        console.error('[GENERATE] Storage download failed:', dlError?.message ?? 'no data')
+      }
+    } catch (err) {
+      console.error('[GENERATE] Download error:', err instanceof Error ? err.message : err)
+    }
+
+    // Method 2: Signed URL as fallback
+    if (!imagePath) {
+      const { data: signed, error: signedError } = await admin.storage
+        .from('project-files')
+        .createSignedUrl(originalFile.storage_path, 300)
+
+      if (signedError) {
+        console.error('[GENERATE] Signed URL failed:', signedError.message)
+      }
+      imageUrl = signed?.signedUrl
+    }
+  } else {
+    console.error('[GENERATE] No original file found for project', project_id)
   }
 
   const embroideryParams = {
@@ -145,7 +174,8 @@ export async function POST(request: Request) {
     },
     brief: { content: brief?.content ?? '', intent: brief?.intent ?? {} },
     digitization,
-    image_url: imageUrl,
+    image_path: imagePath ?? null,
+    image_url: imageUrl ?? null,
   }
 
   // Generate real embroidery file with pyembroidery
@@ -158,6 +188,11 @@ export async function POST(request: Request) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: 'File generation failed: ' + message }, { status: 500 })
+  }
+
+  // Clean up temp image file
+  if (imagePath) {
+    await unlink(imagePath).catch(() => {})
   }
 
   const debug = parseDebugLog(debugLog)

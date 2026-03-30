@@ -1,16 +1,19 @@
 """
-generate_embroidery.py — v2
+generate_embroidery.py — v3
 Converts a design image into a real embroidery file using pyembroidery + Pillow.
 Supports transparent (RGBA) and opaque (RGB) images.
 Separates regions by color and respects angle/underlay parameters.
+Accepts local file path (preferred) or URL for image input.
 
 Usage:
   python generate_embroidery.py <FORMAT> <output_path> < params.json
+  python generate_embroidery.py --test <image_path> <output_path>
 """
 
 import sys
 import json
 import math
+import os
 import urllib.request
 import io
 import pyembroidery
@@ -24,17 +27,33 @@ except ImportError:
     np = None
 
 
-# ── Image download ─────────────────────────────────────────────────
+# ── Image loading (file path preferred, URL as fallback) ──────────
 
-def download_image(url: str):
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "BordAI/1.0"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = resp.read()
-        return Image.open(io.BytesIO(data))
-    except Exception as e:
-        print(f"[WARN] Could not download image: {e}", file=sys.stderr)
-        return None
+def load_image(path: str = None, url: str = None):
+    """Load image from local file path or URL. Returns PIL Image or None."""
+    # Try local file first (most reliable — passed by Node.js)
+    if path and os.path.exists(path):
+        try:
+            img = Image.open(path)
+            print(f"[IMG] Loaded from file: {path} ({os.path.getsize(path)} bytes)", file=sys.stderr)
+            return img
+        except Exception as e:
+            print(f"[WARN] Could not open file {path}: {e}", file=sys.stderr)
+
+    # Fall back to URL download
+    if url:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "BordAI/1.0"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+            img = Image.open(io.BytesIO(data))
+            print(f"[IMG] Downloaded from URL: {img.size}, mode={img.mode}", file=sys.stderr)
+            return img
+        except Exception as e:
+            print(f"[WARN] Could not download image from URL: {e}", file=sys.stderr)
+
+    print("[WARN] No image source available (no file path and no URL)", file=sys.stderr)
+    return None
 
 
 # ── Smart mask detection (Step 1) ──────────────────────────────────
@@ -198,107 +217,148 @@ def stitches_from_mask(
     stitch_type: str,
     angle: float = 0,
 ):
-    """Generate embroidery stitches from a boolean mask."""
+    """Generate embroidery stitches from a boolean mask using direct angled scanlines."""
     if mask.sum() == 0:
         return
 
-    # If angle != 0, rotate the mask, generate horizontal fills, rotate coordinates back
-    use_rotation = abs(angle) > 5
-    if use_rotation:
-        mask_img = Image.fromarray((mask.astype(np.uint8) * 255))
-        rotated = mask_img.rotate(-angle, expand=True, fillcolor=0)
-        work_mask = np.array(rotated) > 128
-        # Compute scale factors for the expanded rotated image
-        rh, rw = work_mask.shape
-        rad = math.radians(angle)
-        cos_a, sin_a = math.cos(rad), math.sin(rad)
-    else:
-        work_mask = mask
-        rh, rw = mask.shape
-
-    h_orig, w_orig = mask.shape
+    h, w = mask.shape
     W_emb = int(width_mm * 10)  # embroidery units (0.1mm)
     H_emb = int(height_mm * 10)
 
-    def to_emb(px, py, from_w, from_h):
-        """Convert pixel coords → embroidery units."""
-        return int(px * W_emb / from_w), int(py * H_emb / from_h)
+    def to_emb(px, py):
+        """Convert pixel coords → embroidery units (always uses original mask dims)."""
+        return int(px * W_emb / w), int(py * H_emb / h)
 
-    def rotate_back(ex, ey):
-        """Rotate embroidery coordinates back by +angle degrees."""
-        if not use_rotation:
-            return ex, ey
-        # Center of embroidery space
-        cx, cy = W_emb / 2, H_emb / 2
-        dx, dy = ex - cx, ey - cy
-        rx = dx * cos_a - dy * sin_a + cx
-        ry = dx * sin_a + dy * cos_a + cy
-        return int(rx), int(ry)
-
-    wm_h, wm_w = work_mask.shape
     row_spacing_mm = 1.0 / max(density, 1)
-    row_spacing_px = max(1, int(row_spacing_mm * wm_h / height_mm))
+    row_spacing_px = max(1, int(row_spacing_mm * h / height_mm))
 
     if stitch_type in ("tatami", "fill", "satin"):
-        going_right = True
-        prev_x, prev_y = None, None
-
-        for py in range(0, wm_h, row_spacing_px):
-            row = work_mask[py]
-            dark = np.where(row)[0]
-            if len(dark) == 0:
-                going_right = not going_right
-                continue
-
-            x_left, x_right = int(dark[0]), int(dark[-1])
-            if x_right - x_left < 2:
-                continue
-
-            ex_l, ey = to_emb(x_left, py, wm_w, wm_h)
-            ex_r, _ = to_emb(x_right, py, wm_w, wm_h)
-            ex_l, ey = rotate_back(ex_l, ey)
-            ex_r, _ = rotate_back(ex_r, ey)
-
-            xs = ex_l if going_right else ex_r
-            xe = ex_r if going_right else ex_l
-
-            if prev_x is None or abs(xs - prev_x) > 120 or abs(ey - prev_y) > 120:
-                pattern.add_command(pyembroidery.JUMP, xs, ey)
-
-            pattern.add_stitch_absolute(pyembroidery.STITCH, xs, ey)
-            pattern.add_stitch_absolute(pyembroidery.STITCH, xe, ey)
-            prev_x, prev_y = xe, ey
-            going_right = not going_right
+        _fill_with_angle(mask, pattern, w, h, W_emb, H_emb, angle, row_spacing_px, to_emb)
 
     elif stitch_type in ("running", "triple"):
-        # Find edge pixels
-        edge_px = []
-        skip = max(1, row_spacing_px // 2)
-        for py in range(1, wm_h - 1, skip):
-            for px in range(1, wm_w - 1):
-                if not work_mask[py][px]:
-                    continue
-                if not (work_mask[py - 1][px] and work_mask[py + 1][px] and
-                        work_mask[py][px - 1] and work_mask[py][px + 1]):
-                    edge_px.append((px, py))
+        _running_stitch(mask, pattern, w, h, row_spacing_px, to_emb, stitch_type)
 
-        if not edge_px:
-            return
 
-        prev_x, prev_y = None, None
-        for px, py in sorted(edge_px, key=lambda p: (p[1], p[0])):
-            ex, ey = to_emb(px, py, wm_w, wm_h)
-            ex, ey = rotate_back(ex, ey)
-            if prev_x is None or abs(ex - prev_x) > 150 or abs(ey - prev_y) > 150:
-                pattern.add_command(pyembroidery.JUMP, ex, ey)
+def _fill_with_angle(mask, pattern, w, h, W_emb, H_emb, angle, row_spacing_px, to_emb):
+    """Generate fill stitches at a given angle using direct scanlines (no rotation)."""
+    rad = math.radians(angle)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+
+    # For angle=0: scanlines are horizontal (scan along Y, stitch along X)
+    # For angle=45: scanlines are diagonal
+    # Scan direction is perpendicular to the fill direction
+    # Fill direction: (cos_a, sin_a)
+    # Scan direction: (-sin_a, cos_a)
+
+    # Compute the range of the scan direction we need to cover
+    # Project all 4 corners of the image onto the scan direction
+    corners = [(0, 0), (w, 0), (0, h), (w, h)]
+    scan_values = [(-sin_a * cx + cos_a * cy) for cx, cy in corners]
+    scan_min = min(scan_values)
+    scan_max = max(scan_values)
+
+    going_right = True
+    prev_ex, prev_ey = None, None
+
+    # Step along scan direction
+    scan_pos = scan_min
+    while scan_pos <= scan_max:
+        # For this scan position, find all mask pixels along the fill direction
+        # The scanline equation: -sin_a * x + cos_a * y = scan_pos
+        # We sample along the fill direction to find runs of True pixels
+
+        runs = _find_runs_on_scanline(mask, w, h, cos_a, sin_a, scan_pos)
+
+        for x_start, y_start, x_end, y_end in runs:
+            ex_s, ey_s = to_emb(x_start, y_start)
+            ex_e, ey_e = to_emb(x_end, y_end)
+
+            if not going_right:
+                ex_s, ey_s, ex_e, ey_e = ex_e, ey_e, ex_s, ey_s
+
+            # Jump if far from previous stitch
+            if prev_ex is None or abs(ex_s - prev_ex) > 120 or abs(ey_s - prev_ey) > 120:
+                pattern.add_command(pyembroidery.JUMP, ex_s, ey_s)
+
+            pattern.add_stitch_absolute(pyembroidery.STITCH, ex_s, ey_s)
+            pattern.add_stitch_absolute(pyembroidery.STITCH, ex_e, ey_e)
+            prev_ex, prev_ey = ex_e, ey_e
+
+        going_right = not going_right
+        scan_pos += row_spacing_px
+
+
+def _find_runs_on_scanline(mask, w, h, cos_a, sin_a, scan_pos):
+    """Find runs of True pixels along a scanline at the given angle.
+    Returns list of (x_start, y_start, x_end, y_end) for each run."""
+    # Project corners onto the fill direction to find sample range
+    corners = [(0, 0), (w, 0), (0, h), (w, h)]
+    fill_values = [(cos_a * cx + sin_a * cy) for cx, cy in corners]
+    fill_min = min(fill_values)
+    fill_max = max(fill_values)
+
+    # Sample points along the fill direction for this scanline
+    runs = []
+    in_run = False
+    run_start = None
+    prev_px, prev_py = 0, 0
+
+    # Step size: 1 pixel
+    t = fill_min
+    while t <= fill_max:
+        # Convert (fill_t, scan_pos) back to (x, y)
+        px = cos_a * t - sin_a * scan_pos
+        py = sin_a * t + cos_a * scan_pos
+
+        ix, iy = int(round(px)), int(round(py))
+
+        if 0 <= ix < w and 0 <= iy < h and mask[iy, ix]:
+            if not in_run:
+                in_run = True
+                run_start = (px, py)
+            prev_px, prev_py = px, py
+        else:
+            if in_run:
+                runs.append((run_start[0], run_start[1], prev_px, prev_py))
+                in_run = False
+
+        t += 1.0
+
+    # Close last run
+    if in_run:
+        runs.append((run_start[0], run_start[1], prev_px, prev_py))
+
+    return runs
+
+
+def _running_stitch(mask, pattern, w, h, row_spacing_px, to_emb, stitch_type):
+    """Generate running/triple stitches along the edge of the mask."""
+    edge_px = []
+    skip = max(1, row_spacing_px // 2)
+    for py in range(1, h - 1, skip):
+        for px in range(1, w - 1):
+            if not mask[py][px]:
+                continue
+            if not (mask[py - 1][px] and mask[py + 1][px] and
+                    mask[py][px - 1] and mask[py][px + 1]):
+                edge_px.append((px, py))
+
+    if not edge_px:
+        return
+
+    prev_x, prev_y = None, None
+    for px, py in sorted(edge_px, key=lambda p: (p[1], p[0])):
+        ex, ey = to_emb(px, py)
+        if prev_x is None or abs(ex - prev_x) > 150 or abs(ey - prev_y) > 150:
+            pattern.add_command(pyembroidery.JUMP, ex, ey)
+        pattern.add_stitch_absolute(pyembroidery.STITCH, ex, ey)
+        prev_x, prev_y = ex, ey
+
+    if stitch_type == "triple":
+        for px, py in sorted(edge_px, key=lambda p: (-p[1], -p[0])):
+            ex, ey = to_emb(px, py)
             pattern.add_stitch_absolute(pyembroidery.STITCH, ex, ey)
-            prev_x, prev_y = ex, ey
-
-        if stitch_type == "triple":
-            for px, py in sorted(edge_px, key=lambda p: (-p[1], -p[0])):
-                ex, ey = to_emb(px, py, wm_w, wm_h)
-                ex, ey = rotate_back(ex, ey)
-                pattern.add_stitch_absolute(pyembroidery.STITCH, ex, ey)
 
 
 def generate_underlay(
@@ -347,11 +407,11 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
         t.name = "Black"
         pattern.add_thread(t)
 
-    # Download and process image
-    img = download_image(image_url) if image_url and HAS_PIL else None
+    # Load image from file path (preferred) or URL (fallback)
+    image_path = params.get("image_path")
+    img = load_image(path=image_path, url=image_url) if HAS_PIL else None
 
     if img is not None and HAS_PIL:
-        print(f"[IMG] Downloaded: {img.size}, mode={img.mode}", file=sys.stderr)
 
         # Resize for embroidery resolution (~3px per mm for quality)
         scale = 3.0
@@ -430,20 +490,63 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python generate_embroidery.py <FORMAT> <output_path>", file=sys.stderr)
-        sys.exit(1)
+    # Test mode: python generate_embroidery.py --test <image_path> <output_path>
+    if len(sys.argv) >= 2 and sys.argv[1] == "--test":
+        if len(sys.argv) < 4:
+            print("Usage: python generate_embroidery.py --test <image_path> <output_path>", file=sys.stderr)
+            sys.exit(1)
 
-    fmt = sys.argv[1]
-    output_path = sys.argv[2]
-    raw = sys.stdin.read()
-    params = json.loads(raw)
+        test_image = sys.argv[2]
+        test_output = sys.argv[3]
+        fmt = test_output.rsplit(".", 1)[-1].upper() if "." in test_output else "DST"
 
-    try:
-        result = generate(params, fmt, output_path)
-        print(json.dumps({"success": True, "path": result}))
-    except Exception as e:
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        print(json.dumps({"success": False, "error": str(e)}))
-        sys.exit(1)
+        if not os.path.exists(test_image):
+            print(f"Error: Image not found: {test_image}", file=sys.stderr)
+            sys.exit(1)
+
+        # Auto-generate test params by sampling image colors
+        img = Image.open(test_image)
+        print(f"[TEST] Image: {test_image} ({img.size}, mode={img.mode})", file=sys.stderr)
+
+        test_params = {
+            "meta": {"project_name": "Test"},
+            "brief": {"content": "Test"},
+            "digitization": {
+                "regions": [
+                    {"name": "Region principal", "stitch_type": "tatami", "density": 5, "angle": 0, "underlay": True, "color_hex": "#000000"},
+                ],
+                "thread_colors": [{"index": 1, "name": "Negro", "hex": "#000000"}],
+                "total_stitches_estimate": 5000,
+                "width_mm": 80,
+                "height_mm": 80,
+            },
+            "image_path": test_image,
+        }
+
+        try:
+            result = generate(test_params, fmt, test_output)
+            print(json.dumps({"success": True, "path": result}))
+        except Exception as e:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            print(json.dumps({"success": False, "error": str(e)}))
+            sys.exit(1)
+    else:
+        # Normal mode: read params from stdin
+        if len(sys.argv) < 3:
+            print("Usage: python generate_embroidery.py <FORMAT> <output_path>", file=sys.stderr)
+            sys.exit(1)
+
+        fmt = sys.argv[1]
+        output_path = sys.argv[2]
+        raw = sys.stdin.read()
+        params = json.loads(raw)
+
+        try:
+            result = generate(params, fmt, output_path)
+            print(json.dumps({"success": True, "path": result}))
+        except Exception as e:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            print(json.dumps({"success": False, "error": str(e)}))
+            sys.exit(1)
