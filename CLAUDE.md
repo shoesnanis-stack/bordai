@@ -11,121 +11,144 @@ SaaS that converts customer images into machine-ready embroidery files (.PES, .D
 ```bash
 # Frontend (Next.js)
 npm run dev              # http://localhost:3000
-npm run build            # Production build
-npm run lint             # ESLint
-npm start                # Serve production build
+npm run build
+npm run lint
 
 # Python workers (Docker required)
-npm run workers:up       # Start Redis + FastAPI + Celery
-npm run workers:down     # Stop all worker containers
-npm run workers:logs     # Tail celery_worker + fastapi logs
+npm run workers:up       # Redis + FastAPI + Celery
+npm run workers:down
+npm run workers:logs
 npm run workers:dev      # Also starts Flower at http://localhost:5555
 ```
 
-**First-time setup:** copy `.env.local.example` → `.env.local`, fill Supabase + AI keys → `npm install` → `workers:up` → `dev`
+**First-time setup:** copy `.env.local.example` → `.env.local`, fill all keys → `npm install` → run SQL from `supabase/migrations/001_initial_schema.sql` in Supabase SQL Editor → `npm run dev`
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Framework | Next.js 16, React 19, TypeScript |
-| Styling | Tailwind CSS 4, shadcn/ui |
-| Auth + DB + Storage | Supabase (PostgreSQL, RLS, Storage buckets) |
-| State | Zustand |
-| AI Workers | Python 3.12, FastAPI, Celery + Redis |
-| ML Models | SAM (segmentation), Real-ESRGAN (upscaling), Claude/GPT-4o (vision), SD/DALL-E (generation) |
-| Embroidery | pyembroidery (stitch generation + format export), vtracer (vectorization) |
+| Styling | Tailwind CSS 4 |
+| Auth + DB + Storage | Supabase (PostgreSQL + RLS + Storage buckets) |
+| AI | OpenAI GPT-4o Vision (analysis, stitch assignment) |
+| Workers | Python 3.12, FastAPI, Celery + Redis |
+| Embroidery | pyembroidery (stitch generation + format export) |
 
 ## Architecture
 
 ```
 src/
 ├── app/
-│   ├── (auth)/           # Login, register (public, no sidebar)
-│   ├── (dashboard)/      # Authenticated pages with sidebar
-│   │   ├── projects/     # Project list
-│   │   └── project/[id]/ # Project detail + pipeline tracker
-│   │       └── preview/  # Interactive embroidery preview (F4)
+│   ├── (auth)/               # Login, register (no sidebar)
+│   ├── (dashboard)/          # Authenticated pages
+│   │   ├── projects/         # Project list
+│   │   └── project/[id]/     # Project detail + pipeline tracker
+│   │       └── preview/      # Embroidery preview + approval (F4)
 │   └── api/
-│       ├── projects/     # CRUD
-│       ├── pipeline/     # start/ and status/[id] — dispatches to Python workers
-│       └── webhooks/     # Stripe
+│       └── pipeline/
+│           ├── analyze/      # POST — GPT-4o vision analysis (F1)
+│           ├── prepare/      # POST — stitch type assignment (F3)
+│           ├── generate/     # POST — package embroidery params (F5)
+│           └── download/     # GET  — signed URL for file download
 ├── components/
-│   ├── ui/               # shadcn components
-│   ├── onboarding/       # F0: project type, surface, hoop, machine selectors
-│   ├── pipeline/         # F1-F3: step indicators, brief editor
-│   ├── preview/          # F4: embroidery simulation viewer
-│   └── shared/           # Sidebar, navbar
+│   ├── onboarding/           # F0: project type, surface, hoop, machine
+│   ├── pipeline/
+│   │   └── pipeline-tracker.tsx  # All phase components live here
+│   └── preview/
+│       └── preview-viewer.tsx    # F4: image + stitch params display
 ├── lib/
-│   ├── supabase/         # client.ts (browser), server.ts (SSR), middleware.ts
-│   ├── constants.ts      # Hoop sizes, machine formats, thread palettes, stitch limits
-│   └── utils.ts          # cn() helper
-├── stores/               # Zustand: project-store, pipeline-store
-├── types/                # All TypeScript types and enums
-└── proxy.ts              # Supabase auth session refresh (Next.js 16 uses "proxy" not "middleware")
+│   ├── supabase/
+│   │   ├── client.ts         # Browser client
+│   │   ├── server.ts         # Server client with cookies
+│   │   ├── admin.ts          # Service role client — bypasses RLS, server only
+│   │   └── middleware.ts     # Auth session refresh helper
+│   ├── constants.ts          # HOOP_SIZES, SURFACE_OPTIONS, MACHINE_FORMATS, PIPELINE_PHASES
+│   └── utils.ts              # cn() helper
+├── stores/
+│   ├── project-store.ts
+│   └── pipeline-store.ts
+├── types/index.ts
+└── proxy.ts                  # Auth session refresh (Next.js 16: "proxy" not "middleware")
 
-workers/                  # Python backend (separate Docker containers)
-├── main.py               # FastAPI — receives pipeline dispatch from Next.js API
-├── celery_app.py         # Celery config with Redis broker
-├── tasks/                # One file per pipeline phase
-│   ├── vision.py         # F1: LLM vision analysis → generates brief
-│   ├── segment.py        # F2: SAM segmentation → extracts element
-│   ├── upscale.py        # F2: Real-ESRGAN upscaling
-│   ├── generate.py       # F2B: Image regeneration (SD/DALL-E)
-│   ├── vectorize.py      # F3: Bitmap → SVG (vtracer)
-│   ├── digitize.py       # F3/F5: SVG → stitch parameters
-│   ├── validate.py       # F5: Pre-export validation
-│   └── export.py         # F5: pyembroidery → .PES/.DST/.JEF
-├── docker-compose.yml    # Redis + FastAPI + Celery + Flower
-└── config.py             # Environment variable access
+workers/                      # Python backend (Docker)
+├── main.py                   # FastAPI app
+├── celery_app.py
+├── tasks/
+│   ├── vision.py             # F1: LLM vision analysis
+│   ├── segment.py            # F2: SAM segmentation
+│   ├── upscale.py            # F2: Real-ESRGAN upscaling
+│   ├── generate.py           # F2B: Image generation (SD/DALL-E)
+│   ├── vectorize.py          # F3: Bitmap → SVG (vtracer)
+│   ├── digitize.py           # F3/F5: SVG → stitch parameters
+│   ├── validate.py           # F5: Pre-export validation
+│   └── export.py             # F5: pyembroidery → .PES/.DST/.JEF
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── config.py
 
-supabase/migrations/      # SQL schema with RLS policies
+supabase/migrations/001_initial_schema.sql   # Full DB schema + RLS policies
 ```
 
 ## Pipeline Phases
 
-| Phase | Code | Description | Worker Task |
-|-------|------|-------------|-------------|
-| F0 | `onboarding` | Client selects project type, surface, hoop, machine | Frontend only |
-| F1 | `ingestion` | LLM+Vision analyzes image, generates brief for approval | `tasks.vision` |
-| F2 | `extraction` | SAM segments element, removes background, upscales if needed | `tasks.segment`, `tasks.upscale` |
-| F2B | `extraction` | Regeneration route — generates clean image when original is unusable | `tasks.generate` |
-| F3 | `preparation` | Vectorize (bitmap→SVG), segment regions, assign stitch types + thread colors | `tasks.vectorize` |
-| F4 | `preview` | Interactive simulation: stitch direction, real thread colors, surface mockup | Frontend (uses vectorized data) |
-| F5 | `generation` | Digitize (SVG→stitch params), validate, export to machine format | `tasks.digitize`, `tasks.validate`, `tasks.export` |
-| F6 | `delivery` | Download embroidery file + PDF instructions, collect feedback | Frontend + DB |
+| Phase | Code | Where | Description |
+|-------|------|-------|-------------|
+| F0 | `onboarding` | Frontend | Client selects type, surface, hoop, machine → creates project |
+| F1 | `ingestion` | `api/pipeline/analyze` + GPT-4o | Analyzes image, generates brief for approval |
+| F2 | `extraction` | Frontend (skip if clean bg) / workers | SAM segmentation + upscaling |
+| F3 | `preparation` | `api/pipeline/prepare` + GPT-4o | Assigns stitch types + thread colors per region |
+| F4 | `preview` | `/project/[id]/preview` | Client reviews image + stitch params, approves |
+| F5 | `generation` | `api/pipeline/generate` | Packages params JSON, saves to storage |
+| F6 | `delivery` | Frontend | Download file |
 
-## Data flow: Next.js → Workers
+## Supabase
 
-1. Frontend calls `POST /api/pipeline/start` with `{ project_id, phase }`
-2. API route creates a `pipeline_runs` record and dispatches to `POST worker:8000/api/pipeline/process`
-3. FastAPI routes the request to the correct Celery task
-4. Celery task processes asynchronously, updates Supabase directly (using service role key)
-5. Frontend polls `GET /api/pipeline/status/[run_id]` or listens via Supabase Realtime
+**Storage bucket:** `project-files` (private). Files stored as `{user_id}/{project_id}/{phase}/{filename}`.
 
-## Database (Supabase)
+**Required RLS policies** (run in SQL Editor if hitting RLS errors):
+```sql
+create policy "Users can insert own project files" on public.project_files
+  for insert with check (exists (select 1 from public.projects where id = project_id and user_id = auth.uid()));
+create policy "Users can insert own briefs" on public.briefs
+  for insert with check (exists (select 1 from public.projects where id = project_id and user_id = auth.uid()));
+create policy "Users can update own briefs" on public.briefs
+  for update using (exists (select 1 from public.projects where id = project_id and user_id = auth.uid()));
+create policy "Users can update own projects" on public.projects
+  for update using (auth.uid() = user_id);
+```
 
-Key tables: `profiles`, `projects`, `project_files`, `briefs`, `pipeline_runs`, `feedback`.
-
-All tables have RLS enabled — user can only access their own data. Schema in `supabase/migrations/001_initial_schema.sql`.
-
-Storage bucket `project-files` stores all uploaded and generated files, organized as `{user_id}/{project_id}/{phase}/{filename}`.
+To inspect all existing policies: `select tablename, policyname, cmd from pg_policies where schemaname in ('public', 'storage') order by tablename;`
 
 ## Critical conventions
 
-- **Next.js 16 + React 19**: Proxy file is `proxy.ts` with exported function `proxy` (not `middleware`). Route handler params are `Promise` (must `await params`). Use `useActionState` from `"react"` for server actions.
-- **Tailwind CSS 4**: Uses `@import "tailwindcss"` in globals.css, not the old `@tailwind` directives.
-- **Supabase auth**: Three client variants — `client.ts` (browser), `server.ts` (server components/actions), `middleware.ts` (edge). Always use the right one for the context.
-- **All UI text in Spanish** — the target market is Latin America.
-- **Worker tasks are idempotent** — a task can be retried safely. Each task reads from and writes to Supabase.
-- **pyembroidery** is the core library for embroidery file generation. It handles all machine formats.
-- **Embroidery validation limits**: max jump 12mm, density 3-7 stitches/mm, max 20 color changes. See `src/lib/constants.ts` for all limits.
+- **Next.js 16 + React 19**: Proxy file is `proxy.ts` with exported function `proxy`. Route handler params are `Promise` (must `await params`).
+- **Tailwind CSS 4**: `@import "tailwindcss"` in globals.css — not the old `@tailwind` directives.
+- **Supabase clients**: Use `client.ts` in Client Components, `server.ts` in Server Components/API routes, `admin.ts` (service role) for write operations in API routes to bypass RLS.
+- **Images from Supabase Storage**: Requires `remotePatterns` in `next.config.ts` for `*.supabase.co`.
+- **All UI text in Spanish** — target market is Latin America.
+- **Pipeline phase transitions**: Always update `projects.current_phase` via `admin.ts` client in API routes.
+
+## What works today (end-to-end)
+
+- Full F0–F6 pipeline
+- GPT-4o Vision for image analysis (F1) and stitch assignment (F3)
+- Image upload to Supabase Storage
+- Brief generation + client approval flow
+- Preview with image, stitch regions table, thread color order
+- Params JSON download (F6)
+
+## What needs Python workers next
+
+- Real `.DST`/`.PES` binary file generation → `workers/tasks/export.py` (pyembroidery)
+- SAM segmentation for images with busy backgrounds → `workers/tasks/segment.py`
+- Real-ESRGAN upscaling for low-quality images → `workers/tasks/upscale.py`
+- vtracer vectorization (bitmap → SVG) → `workers/tasks/vectorize.py`
 
 ## Embroidery domain knowledge
 
-- **Stitch types**: Tatami (large fills), Satin (letters/details/borders), Running (outlines), Triple (reinforced outlines)
-- **Underlay**: Required beneath all stitch regions to prevent fabric puckering
-- **Pull compensation**: Stitches pull fabric inward — compensate by slightly oversizing the design
-- **Thread palettes**: Madeira, Robison-Anton, Isacord, Gutermann — system maps design colors to real thread codes
-- **Machine formats**: Brother=PES, Tajima=DST, Janome=JEF, Pfaff=VIP, Husqvarna=HUS, Generic=EXP
-- **Hoop constraint is absolute** — the design must fit within the selected hoop dimensions or it cannot be stitched
+- **Stitch types**: Tatami (large fills >10mm), Satin (text/borders/details), Running (outlines), Triple (reinforced outlines)
+- **Underlay**: Required beneath all regions except running stitch — prevents fabric puckering
+- **Density**: 4–6 stitches/mm. Max jump 12mm. Max 20 color changes.
+- **Machine formats**: Brother → PES, Tajima/Barudan → DST, Janome → JEF, Pfaff → VIP, Husqvarna → HUS
+- **Hoop constraint is absolute** — design must fit within selected hoop or it cannot be stitched

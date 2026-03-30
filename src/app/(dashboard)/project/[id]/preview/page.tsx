@@ -22,13 +22,30 @@ export default async function PreviewPage({
     .from('project_files')
     .select('*')
     .eq('project_id', id)
-    .in('file_type', ['vectorized', 'preview'])
+
+  // Get signed URL for the original image to display
+  const originalFile = files?.find((f) => f.file_type === 'original')
+  let imageUrl: string | null = null
+  if (originalFile) {
+    const { data } = await supabase.storage
+      .from('project-files')
+      .createSignedUrl(originalFile.storage_path, 3600)
+    imageUrl = data?.signedUrl ?? null
+  }
+
+  // Get digitization params from the vectorized file metadata
+  const vectorized = files?.find((f) => f.file_type === 'vectorized')
+  const digitizationParams = vectorized?.metadata ?? null
 
   return (
     <div>
       <h1 className="mb-2 text-2xl font-bold">Vista previa del bordado</h1>
       <p className="mb-6 text-sm text-gray-500">{project.name}</p>
-      <PreviewViewer project={project} files={files ?? []} />
+      <PreviewViewer
+        project={project}
+        imageUrl={imageUrl}
+        digitizationParams={digitizationParams}
+      />
     </div>
   )
 }
