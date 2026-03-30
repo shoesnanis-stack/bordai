@@ -1,9 +1,8 @@
 """
-generate_embroidery.py — v3
+generate_embroidery.py — v4 (production quality)
 Converts a design image into a real embroidery file using pyembroidery + Pillow.
-Supports transparent (RGBA) and opaque (RGB) images.
-Separates regions by color and respects angle/underlay parameters.
-Accepts local file path (preferred) or URL for image input.
+Professional-grade: fabric profiles, tie-in/tie-off, TRIM on long jumps,
+proper stitch ordering, pull compensation, 3 underlay types, validation.
 
 Usage:
   python generate_embroidery.py <FORMAT> <output_path> < params.json
@@ -17,6 +16,10 @@ import os
 import urllib.request
 import io
 import pyembroidery
+
+# Add script dir to path for perfiles import
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from perfiles import get_profile, FabricProfile
 
 try:
     from PIL import Image, ImageFilter, ImageOps
@@ -263,6 +266,7 @@ def stitches_from_mask(
     density: float,
     stitch_type: str,
     angle: float = 0,
+    pull_compensation_px: float = 0,
 ):
     """Generate embroidery stitches from a boolean mask using direct angled scanlines."""
     if mask.sum() == 0:
@@ -280,14 +284,17 @@ def stitches_from_mask(
     row_spacing_px = max(1, int(row_spacing_mm * h / height_mm))
 
     if stitch_type in ("tatami", "fill", "satin"):
-        _fill_with_angle(mask, pattern, w, h, W_emb, H_emb, angle, row_spacing_px, to_emb)
+        _fill_with_angle(mask, pattern, w, h, W_emb, H_emb, angle,
+                         row_spacing_px, to_emb, pull_compensation_px)
 
     elif stitch_type in ("running", "triple"):
         _running_stitch(mask, pattern, w, h, row_spacing_px, to_emb, stitch_type)
 
 
-def _fill_with_angle(mask, pattern, w, h, W_emb, H_emb, angle, row_spacing_px, to_emb):
-    """Generate fill stitches at a given angle using direct scanlines (no rotation)."""
+def _fill_with_angle(mask, pattern, w, h, W_emb, H_emb, angle, row_spacing_px, to_emb,
+                     pull_compensation_px=0):
+    """Generate fill stitches at a given angle using direct scanlines (no rotation).
+    pull_compensation_px: extend each run outward by this many pixels for pull compensation."""
     rad = math.radians(angle)
     cos_a = math.cos(rad)
     sin_a = math.sin(rad)
@@ -316,6 +323,15 @@ def _fill_with_angle(mask, pattern, w, h, W_emb, H_emb, angle, row_spacing_px, t
         # We sample along the fill direction to find runs of True pixels
 
         runs = _find_runs_on_scanline(mask, w, h, cos_a, sin_a, scan_pos)
+
+        # Apply pull compensation: extend each run outward along fill direction
+        if pull_compensation_px > 0:
+            comp = pull_compensation_px
+            runs = [
+                (xs - cos_a * comp, ys - sin_a * comp,
+                 xe + cos_a * comp, ye + sin_a * comp)
+                for xs, ys, xe, ye in runs
+            ]
 
         for x_start, y_start, x_end, y_end in runs:
             ex_s, ey_s = to_emb(x_start, y_start)
@@ -408,21 +424,81 @@ def _running_stitch(mask, pattern, w, h, row_spacing_px, to_emb, stitch_type):
             pattern.add_stitch_absolute(pyembroidery.STITCH, ex, ey)
 
 
-def generate_underlay(
-    mask: np.ndarray,
-    pattern: pyembroidery.EmbPattern,
-    width_mm: float,
-    height_mm: float,
-    main_angle: float,
-):
-    """Low-density perpendicular fill for fabric stabilization."""
+def generate_underlay(mask, pattern, width_mm, height_mm, main_angle, uconfig=None):
+    """Dispatch to the appropriate underlay type based on profile config."""
+    if uconfig is None:
+        # Fallback: simple perpendicular fill
+        underlay_angle = main_angle + 90
+        stitches_from_mask(mask, pattern, width_mm, height_mm,
+                          density=2.0, stitch_type="tatami", angle=underlay_angle)
+        return
+
+    utype = uconfig.underlay_type
     underlay_angle = main_angle + 90
-    stitches_from_mask(
-        mask, pattern, width_mm, height_mm,
-        density=2.0,  # low density
-        stitch_type="tatami",
-        angle=underlay_angle,
-    )
+
+    if utype == "center_run":
+        # Single running stitch along the center axis of the region
+        stitches_from_mask(mask, pattern, width_mm, height_mm,
+                          density=1.0, stitch_type="running", angle=0)
+
+    elif utype == "edge_run":
+        # Running stitch along edges, inset from boundary
+        _underlay_edge_run(mask, pattern, width_mm, height_mm, uconfig.inset_mm)
+
+    elif utype == "zigzag_edge_run":
+        # CRITICAL ORDER: zigzag FIRST, then edge_run
+        # Zigzag: perpendicular low-density fill
+        stitches_from_mask(mask, pattern, width_mm, height_mm,
+                          density=uconfig.density, stitch_type="tatami", angle=underlay_angle)
+        # Then edge run
+        _underlay_edge_run(mask, pattern, width_mm, height_mm, uconfig.inset_mm)
+
+    elif utype == "none":
+        pass  # No underlay (e.g., some 3D puff zones)
+
+    else:
+        # Unknown type — fallback to perpendicular fill
+        stitches_from_mask(mask, pattern, width_mm, height_mm,
+                          density=2.0, stitch_type="tatami", angle=underlay_angle)
+
+
+def _underlay_edge_run(mask, pattern, width_mm, height_mm, inset_mm):
+    """Running stitch at inset_mm from the edge of the mask region."""
+    h, w = mask.shape
+    inset_px = max(1, int(inset_mm * h / height_mm))
+
+    # Erode the mask to get the inset boundary
+    from PIL import Image as PILImg
+    mask_img = PILImg.fromarray((mask.astype(np.uint8) * 255))
+    for _ in range(inset_px):
+        mask_img = mask_img.filter(ImageFilter.MinFilter(3))
+    eroded = np.array(mask_img) > 128
+
+    if eroded.sum() == 0:
+        return  # Region too small for edge run
+
+    # Find edge pixels of the eroded mask
+    edge_mask = np.zeros_like(eroded, dtype=bool)
+    for dy in [-1, 0, 1]:
+        for dx in [-1, 0, 1]:
+            if dy == 0 and dx == 0:
+                continue
+            shifted = np.roll(np.roll(eroded, dy, axis=0), dx, axis=1)
+            edge_mask |= (eroded & ~shifted)
+
+    # Generate running stitch along edge pixels
+    W_emb = int(width_mm * 10)
+    H_emb = int(height_mm * 10)
+    edge_coords = list(zip(*np.where(edge_mask)))
+    if not edge_coords:
+        return
+
+    # Sort for coherent path
+    prev_y, prev_x = edge_coords[0]
+    for ey, ex in sorted(edge_coords, key=lambda p: (p[0], p[1]))[::2]:
+        emb_x = int(ex * W_emb / w)
+        emb_y = int(ey * H_emb / h)
+        pattern.add_stitch_absolute(pyembroidery.STITCH, emb_x, emb_y)
 
 
 def generate_contour(
@@ -513,6 +589,213 @@ def generate_contour(
         pattern.add_stitch_absolute(pyembroidery.STITCH, emb_x, emb_y)
 
 
+# ── Tie-in / Tie-off (thread security) ────────────────────────────
+
+def add_tie_in(pattern, x, y, n=3, length=10):
+    """Add n short securing stitches at the START of a section.
+    x, y in embroidery units. length in embroidery units (10 = 1mm)."""
+    for i in range(n):
+        if i % 2 == 0:
+            pattern.add_stitch_absolute(pyembroidery.STITCH, x + length, y)
+        else:
+            pattern.add_stitch_absolute(pyembroidery.STITCH, x, y)
+
+
+def add_tie_off(pattern, x, y, n=3, length=10):
+    """Add n short locking stitches at the END of a section.
+    Stitches back over previously stitched area."""
+    for i in range(n):
+        if i % 2 == 0:
+            pattern.add_stitch_absolute(pyembroidery.STITCH, x - length, y)
+        else:
+            pattern.add_stitch_absolute(pyembroidery.STITCH, x, y)
+
+
+# ── TRIM post-processor ──────────────────────────────────────────
+
+def insert_trims_on_long_jumps(pattern, threshold_units=30):
+    """Post-process: insert TRIM before any JUMP exceeding threshold.
+    threshold_units: distance in 0.1mm. Default 30 = 3.0mm."""
+    old_stitches = list(pattern.stitches)
+    if len(old_stitches) < 2:
+        return
+
+    new_stitches = [old_stitches[0]]
+    trims_added = 0
+
+    for i in range(1, len(old_stitches)):
+        x1, y1, _ = old_stitches[i - 1]
+        x2, y2, cmd2 = old_stitches[i]
+
+        dist = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+        # Insert TRIM before long jumps
+        if cmd2 == pyembroidery.JUMP and dist > threshold_units:
+            new_stitches.append((x1, y1, pyembroidery.TRIM))
+            trims_added += 1
+
+        new_stitches.append(old_stitches[i])
+
+    if trims_added > 0:
+        pattern.stitches = new_stitches
+        print(f"[TRIM] Inserted {trims_added} TRIM commands on long jumps", file=sys.stderr)
+
+
+# ── Color luminosity for ordering ────────────────────────────────
+
+def color_luminosity(hex_color):
+    """Return perceived luminosity (0=black, 1=white) for color sorting."""
+    r, g, b = hex_to_rgb(hex_color)
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+
+
+# ── Stitch sequencing (professional order) ───────────────────────
+
+def sequence_and_generate(
+    regions, color_masks, full_mask, pattern, width_mm, height_mm, profile
+):
+    """Generate all stitches in professional order:
+    1. Fills (light→dark) with underlay per profile
+    2. Satins (light→dark) with underlay per profile
+    3. Running/outline stitches (light→dark)
+    Each has tie-in at start and tie-off at end."""
+
+    # Classify and sort regions
+    fills = []
+    satins = []
+    outlines = []
+
+    for i, region in enumerate(regions):
+        entry = (i, region)
+        st = region.get("stitch_type", "tatami")
+        if st in ("running", "triple"):
+            outlines.append(entry)
+        elif st == "satin":
+            satins.append(entry)
+        else:
+            fills.append(entry)
+
+    # Sort each group: light colors first (higher luminosity first)
+    for group in [fills, satins, outlines]:
+        group.sort(key=lambda e: -color_luminosity(e[1].get("color_hex", "#000000")))
+
+    ordered = fills + satins + outlines
+    print(f"[ORDER] {len(fills)} fills + {len(satins)} satins + {len(outlines)} outlines", file=sys.stderr)
+
+    # Build thread list in execution order
+    seen_colors = []
+    for _, region in ordered:
+        color_hex = region.get("color_hex", "#000000")
+        if color_hex not in seen_colors:
+            seen_colors.append(color_hex)
+
+    # Clear existing threads and add in correct order
+    pattern.threadlist.clear()
+    for hex_color in seen_colors:
+        r, g, b = hex_to_rgb(hex_color)
+        thread = pyembroidery.EmbThread()
+        thread.color = (r << 16) | (g << 8) | b
+        thread.name = hex_color
+        pattern.add_thread(thread)
+
+    # Generate stitches per region in professional order
+    current_color_idx = -1
+    tie_len = int(profile.tie_stitch_length_mm * 10)
+
+    for idx, (i, region) in enumerate(ordered):
+        stitch_type = region.get("stitch_type", "tatami")
+        density = float(region.get("density", 5))
+        angle = float(region.get("angle", 0))
+        wants_underlay = region.get("underlay", True)
+        color_hex = region.get("color_hex", "#000000")
+        region_mask = color_masks[i] if i < len(color_masks) else full_mask
+
+        if region_mask.sum() == 0:
+            print(f"[SKIP] Region '{region.get('name', i)}' has 0 pixels", file=sys.stderr)
+            continue
+
+        # Color change if needed
+        new_color_idx = seen_colors.index(color_hex) if color_hex in seen_colors else 0
+        if current_color_idx != -1 and new_color_idx != current_color_idx:
+            pattern.add_command(pyembroidery.COLOR_BREAK)
+        current_color_idx = new_color_idx
+
+        # Clamp density to professional range
+        row_spacing_mm = 1.0 / max(density, 1)
+        row_spacing_mm = max(row_spacing_mm, profile.fill_density_mm)
+        row_spacing_mm = min(row_spacing_mm, 0.55)
+        clamped_density = 1.0 / row_spacing_mm
+
+        name = region.get('name', f'region_{i}')
+
+        # Get first stitch position for tie-in (centroid of region mask)
+        ys, xs = np.where(region_mask)
+        cx_px, cy_px = int(np.mean(xs)), int(np.mean(ys))
+        h, w = region_mask.shape
+        W_emb = int(width_mm * 10)
+        H_emb = int(height_mm * 10)
+        cx_emb = int(cx_px * W_emb / w)
+        cy_emb = int(cy_px * H_emb / h)
+
+        # Tie-in
+        pattern.add_command(pyembroidery.JUMP, cx_emb, cy_emb)
+        add_tie_in(pattern, cx_emb, cy_emb, profile.tie_in_stitches, tie_len)
+
+        # Underlay (not for running stitches)
+        if wants_underlay and stitch_type not in ("running", "triple"):
+            uconfig = profile.underlay_fill if stitch_type in ("tatami", "fill") else profile.underlay_satin
+            print(f"[UNDERLAY] {uconfig.underlay_type} for '{name}'", file=sys.stderr)
+            generate_underlay(region_mask, pattern, width_mm, height_mm, angle, uconfig)
+
+        # Main stitches
+        print(f"[STITCH] {stitch_type} for '{name}' angle={angle} density={clamped_density:.1f}", file=sys.stderr)
+        stitches_from_mask(region_mask, pattern, width_mm, height_mm,
+                          clamped_density, stitch_type, angle,
+                          pull_compensation_px=profile.pull_compensation_mm * h / height_mm)
+
+        # Contour outline (skip for running stitch which IS an outline)
+        if stitch_type not in ("running", "triple"):
+            generate_contour(region_mask, pattern, width_mm, height_mm)
+
+        # Tie-off at last stitch position
+        if pattern.stitches:
+            last_x, last_y, _ = pattern.stitches[-1]
+            add_tie_off(pattern, last_x, last_y, profile.tie_off_stitches, tie_len)
+
+
+# ── Pre-export validation ────────────────────────────────────────
+
+HOOP_SIZES_PY = {
+    "4x4": (100, 100), "5x7": (130, 180), "6x10": (160, 260),
+    "8x12": (200, 300), "10x10": (260, 260),
+}
+
+def validate_pattern(pattern, width_mm, height_mm, hoop_size, profile):
+    """Pre-export validation. Returns list of warning strings."""
+    warnings = []
+    stitch_count = sum(1 for s in pattern.stitches if s[2] == pyembroidery.STITCH)
+
+    if stitch_count > 500000:
+        warnings.append(f"Demasiadas puntadas: {stitch_count} (max recomendado: 500,000)")
+    elif stitch_count > 200000:
+        warnings.append(f"Muchas puntadas: {stitch_count} — puede ser lento de bordar")
+
+    if stitch_count < 50:
+        warnings.append(f"Muy pocas puntadas: {stitch_count} — posible error de mascara")
+
+    # Check hoop fit
+    hoop_dims = HOOP_SIZES_PY.get(hoop_size, (999, 999))
+    if width_mm > hoop_dims[0] or height_mm > hoop_dims[1]:
+        warnings.append(f"Diseno {width_mm}x{height_mm}mm excede aro {hoop_size} ({hoop_dims[0]}x{hoop_dims[1]}mm)")
+
+    # Count color changes
+    color_changes = sum(1 for s in pattern.stitches if s[2] in (pyembroidery.COLOR_CHANGE, pyembroidery.COLOR_BREAK))
+    if color_changes > 20:
+        warnings.append(f"Demasiados cambios de color: {color_changes} (max recomendado: 20)")
+
+    return warnings
+
+
 # ── Main generator ─────────────────────────────────────────────────
 
 def generate(params: dict, fmt: str, output_path: str) -> str:
@@ -528,7 +811,15 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
     if isinstance(brief, str):
         brief = {"content": brief}
 
-    # Add threads
+    # Load fabric profile from surface type
+    meta = params.get("meta", {})
+    surface = meta.get("surface", "other")
+    profile = get_profile(surface)
+    print(f"[PROFILE] {profile.name} — density={profile.fill_density_mm}mm, "
+          f"pull={profile.pull_compensation_mm}mm, trim={profile.trim_threshold_mm}mm, "
+          f"stabilizer={profile.stabilizer}", file=sys.stderr)
+
+    # Add default threads (will be rebuilt by sequence_and_generate if image loads)
     for tc in thread_colors:
         r, g, b = hex_to_rgb(tc.get("hex", "#000000"))
         thread = pyembroidery.EmbThread()
@@ -548,7 +839,7 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
 
     if img is not None and HAS_PIL:
 
-        # Resize for embroidery resolution (~5px per mm for quality and hole preservation)
+        # Resize for embroidery resolution (~5px per mm)
         scale = 5.0
         target_w = max(120, int(width_mm * scale))
         target_h = max(120, int(height_mm * scale))
@@ -560,7 +851,8 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
         # Build design mask
         full_mask = create_design_mask(img)
         total_px = full_mask.sum()
-        print(f"[IMG] Design pixels: {total_px}/{target_w * target_h} ({total_px / (target_w * target_h) * 100:.0f}%)", file=sys.stderr)
+        print(f"[IMG] Design pixels: {total_px}/{target_w * target_h} "
+              f"({total_px / (target_w * target_h) * 100:.0f}%)", file=sys.stderr)
 
         if total_px == 0:
             print("[WARN] Mask is empty — falling back to full image", file=sys.stderr)
@@ -570,35 +862,14 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
         img_rgba = np.array(img.convert("RGBA"))
         color_masks = create_color_masks(img_rgba, full_mask, regions) if regions else [full_mask]
 
-        # Generate stitches per region
-        for i, region in enumerate(regions if regions else [{"stitch_type": "tatami", "density": 5, "angle": 0, "underlay": True}]):
-            stitch_type = region.get("stitch_type", "tatami")
-            density = float(region.get("density", 5))
-            angle = float(region.get("angle", 0))
-            underlay = region.get("underlay", True)
-            region_mask = color_masks[i] if i < len(color_masks) else full_mask
+        # If no regions defined, create a default
+        if not regions:
+            regions = [{"stitch_type": "tatami", "density": 5, "angle": 0,
+                       "underlay": True, "color_hex": "#000000", "name": "Design"}]
 
-            if region_mask.sum() == 0:
-                print(f"[SKIP] Region '{region.get('name', i)}' has 0 pixels", file=sys.stderr)
-                continue
-
-            # Underlay first (perpendicular, low density)
-            if underlay and stitch_type not in ("running",):
-                print(f"[STITCH] Underlay for '{region.get('name', i)}'", file=sys.stderr)
-                generate_underlay(region_mask, pattern, width_mm, height_mm, angle)
-
-            # Main stitches
-            print(f"[STITCH] {stitch_type} for '{region.get('name', i)}' angle={angle} density={density}", file=sys.stderr)
-            stitches_from_mask(region_mask, pattern, width_mm, height_mm, density, stitch_type, angle)
-
-            # Add contour outline for clean edges (skip for running stitch which IS an outline)
-            if stitch_type not in ("running", "triple"):
-                print(f"[CONTOUR] Adding outline for '{region.get('name', i)}'", file=sys.stderr)
-                generate_contour(region_mask, pattern, width_mm, height_mm)
-
-            # Color change between regions
-            if i < len(regions) - 1:
-                pattern.add_command(pyembroidery.COLOR_BREAK)
+        # Professional stitch sequencing: fills → satins → outlines, light → dark
+        sequence_and_generate(regions, color_masks, full_mask, pattern,
+                             width_mm, height_mm, profile)
 
     else:
         # Fallback: simple geometric pattern
@@ -620,12 +891,23 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
             if i < total - 1:
                 pattern.add_command(pyembroidery.COLOR_BREAK)
 
+    # Post-processing: insert TRIM before long jumps
+    trim_threshold = int(profile.trim_threshold_mm * 10)
+    insert_trims_on_long_jumps(pattern, trim_threshold)
+
+    # Pre-export validation
+    hoop_size = meta.get("hoop_size", "5x7")
+    warnings = validate_pattern(pattern, width_mm, height_mm, hoop_size, profile)
+    for w in warnings:
+        print(f"[VALIDATE] {w}", file=sys.stderr)
+
     pattern.add_command(pyembroidery.END)
     pyembroidery.write(pattern, output_path)
 
     # Stats
     stitch_count = sum(1 for s in pattern.stitches if s[2] == pyembroidery.STITCH)
-    print(f"[DONE] {stitch_count} stitches, {len(pattern.threadlist)} colors → {output_path}", file=sys.stderr)
+    color_count = len(pattern.threadlist)
+    print(f"[DONE] {stitch_count} stitches, {color_count} colors → {output_path}", file=sys.stderr)
     return output_path
 
 

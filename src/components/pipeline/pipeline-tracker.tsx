@@ -460,7 +460,7 @@ function PreparationPhase({ project, onAdvance }: { project: Project; onAdvance:
       {params && (
         <div className="space-y-4">
           <div className="rounded-lg bg-green-50 p-3 text-sm font-medium text-green-800">
-            GPT-4o asigno {params.regions.length} regiones de puntada
+            GPT-4o asigno {(params.regions ?? []).length} regiones de puntada
           </div>
 
           {/* Regions table */}
@@ -478,7 +478,7 @@ function PreparationPhase({ project, onAdvance }: { project: Project; onAdvance:
                 </tr>
               </thead>
               <tbody>
-                {params.regions.map((r, i) => (
+                {(params.regions ?? []).map((r, i) => (
                   <tr key={i} className="border-t">
                     <td className="px-3 py-2 text-gray-400">{i + 1}</td>
                     <td className="px-3 py-2 font-medium">{r.name}</td>
@@ -509,7 +509,7 @@ function PreparationPhase({ project, onAdvance }: { project: Project; onAdvance:
 
           {/* Thread colors */}
           <div className="flex flex-wrap gap-2">
-            {params.thread_colors.map((tc, i) => (
+            {(params.thread_colors ?? []).map((tc, i) => (
               <span key={i} className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs">
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tc.hex }} />
                 {tc.name}
