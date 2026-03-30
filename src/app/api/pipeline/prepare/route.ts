@@ -6,6 +6,26 @@ import type { HoopSize } from '@/types'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
+/** Extract JSON from GPT response that may contain markdown, extra text, etc. */
+function extractJSON(raw: string): Record<string, unknown> {
+  // Try 1: Direct parse
+  try { return JSON.parse(raw.trim()) } catch { /* continue */ }
+
+  // Try 2: Strip markdown code fences
+  const stripped = raw.replace(/```(?:json)?\s*\n?/g, '').replace(/\n?\s*```/g, '').trim()
+  try { return JSON.parse(stripped) } catch { /* continue */ }
+
+  // Try 3: Find first { and last } in the text
+  const firstBrace = raw.indexOf('{')
+  const lastBrace = raw.lastIndexOf('}')
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const jsonStr = raw.slice(firstBrace, lastBrace + 1)
+    try { return JSON.parse(jsonStr) } catch { /* continue */ }
+  }
+
+  throw new Error('No valid JSON found in response')
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -97,15 +117,16 @@ IMPORTANTE — Reglas de color y angulo:
       },
     ],
     max_tokens: 1000,
+    response_format: { type: 'json_object' },
   })
 
   let params
   try {
     const raw = response.choices[0].message.content ?? '{}'
-    const json = raw.replace(/```json\n?|\n?```/g, '').trim()
-    params = JSON.parse(json)
-  } catch {
-    return NextResponse.json({ error: 'Could not parse AI response' }, { status: 500 })
+    params = extractJSON(raw)
+  } catch (e) {
+    console.error('[PREPARE] Failed to parse GPT response:', response.choices[0].message.content)
+    return NextResponse.json({ error: 'Could not parse AI response: ' + (e instanceof Error ? e.message : 'unknown') }, { status: 500 })
   }
 
   // Save digitization params as a project file record (metadata only)
