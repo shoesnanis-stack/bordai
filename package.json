@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "workers:up": "docker compose -f workers/docker-compose.yml up -d redis fastapi celery_worker",
+    "workers:down": "docker compose -f workers/docker-compose.yml down",
+    "workers:logs": "docker compose -f workers/docker-compose.yml logs -f celery_worker fastapi",
+    "workers:dev": "docker compose -f workers/docker-compose.yml --profile dev up -d"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

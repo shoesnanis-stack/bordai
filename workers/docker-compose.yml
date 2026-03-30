@@ -1,0 +1,47 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  fastapi:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: ../.env.local
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+    command: uvicorn main:api --host 0.0.0.0 --port 8000 --reload
+
+  celery_worker:
+    build: .
+    env_file: ../.env.local
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+    command: celery -A celery_app worker --loglevel=info --concurrency=1
+
+  # Optional: Flower monitoring (use with workers:dev)
+  flower:
+    build: .
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: celery -A celery_app flower --port=5555
+    profiles:
+      - dev
+
+volumes:
+  redis-data:
