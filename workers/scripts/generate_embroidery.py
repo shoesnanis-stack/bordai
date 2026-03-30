@@ -103,6 +103,7 @@ def create_design_mask(img: Image.Image) -> np.ndarray:
     """
     Multi-strategy mask: True = part of design, False = background.
     Handles RGBA (transparent bg), RGB (colored/white bg), and grayscale.
+    Preserves interior holes (like the triangle inside the letter A).
     """
     img_rgba = np.array(img.convert("RGBA"))
     h, w = img_rgba.shape[:2]
@@ -113,23 +114,36 @@ def create_design_mask(img: Image.Image) -> np.ndarray:
     if alpha_var > 1000:
         print(f"[MASK] Using alpha channel (variance={alpha_var:.0f})", file=sys.stderr)
         mask = a > 30
-        # Also exclude near-white opaque pixels (white artifacts)
         brightness = (r.astype(int) + g.astype(int) + b.astype(int)) // 3
         mask = mask & (brightness < 245)
         total = mask.sum()
         if total > 0:
             return _cleanup_mask(mask)
 
-    # Strategy 2: Detect background by edge sampling
+    # Strategy 2: Check if image is high-contrast (like a black logo on white)
+    gray = np.array(img.convert("L"))
+    dark_pct = (gray < 80).sum() / (h * w)
+    light_pct = (gray > 200).sum() / (h * w)
+
+    if dark_pct + light_pct > 0.85:
+        # High contrast image: use binary threshold (cleaner for logos with holes)
+        print(f"[MASK] High contrast detected (dark={dark_pct:.0%}, light={light_pct:.0%}) — using binary threshold", file=sys.stderr)
+        # Design = dark pixels for dark-on-light, light pixels for light-on-dark
+        if light_pct > dark_pct:
+            mask = gray < 128  # dark design on light background
+        else:
+            mask = gray > 128  # light design on dark background
+        return _cleanup_mask(mask)
+
+    # Strategy 3: Detect background by edge sampling
     bg_color = detect_background_color(img_rgba)
     print(f"[MASK] Detected background color: RGB({bg_color[0]},{bg_color[1]},{bg_color[2]})", file=sys.stderr)
 
-    # Compute distance from background for each pixel
     rgb = img_rgba[:, :, :3].astype(float)
     bg = bg_color.astype(float).reshape(1, 1, 3)
     dist = np.sqrt(np.sum((rgb - bg) ** 2, axis=2))
 
-    mask = dist > 40  # Pixels far from background are design
+    mask = dist > 40
     total = mask.sum()
     ratio = total / (h * w)
     print(f"[MASK] Edge-based: {total} pixels ({ratio:.1%})", file=sys.stderr)
@@ -137,7 +151,7 @@ def create_design_mask(img: Image.Image) -> np.ndarray:
     if 0.01 < ratio < 0.95:
         return _cleanup_mask(mask)
 
-    # Strategy 3: Fallback — not near-white AND not near-black (catches most logos)
+    # Strategy 4: Fallback brightness
     print("[MASK] Fallback: brightness-based", file=sys.stderr)
     brightness = (r.astype(int) + g.astype(int) + b.astype(int)) // 3
     mask = (brightness < 230) & (brightness > 15)
@@ -145,17 +159,50 @@ def create_design_mask(img: Image.Image) -> np.ndarray:
 
 
 def _cleanup_mask(mask: np.ndarray) -> np.ndarray:
-    """Morphological cleanup: close small gaps, remove tiny islands."""
+    """Light cleanup: remove tiny noise islands but PRESERVE holes in the design."""
     from PIL import Image as PILImage
-    # Convert to PIL for filter operations
+    from scipy import ndimage
     mask_img = PILImage.fromarray((mask.astype(np.uint8) * 255))
-    # Close gaps (dilate then erode)
-    mask_img = mask_img.filter(ImageFilter.MaxFilter(3))
-    mask_img = mask_img.filter(ImageFilter.MinFilter(3))
-    # Remove islands (erode then dilate)
+    # Only remove tiny noise islands (erode then dilate with small kernel)
+    # Do NOT close gaps (MaxFilter→MinFilter) — that fills holes!
     mask_img = mask_img.filter(ImageFilter.MinFilter(3))
     mask_img = mask_img.filter(ImageFilter.MaxFilter(3))
-    return np.array(mask_img) > 128
+    cleaned = np.array(mask_img) > 128
+
+    # Preserve interior holes: label connected False regions.
+    # Holes are False regions NOT touching the image border.
+    try:
+        inverted = ~cleaned
+        labeled, num_features = ndimage.label(inverted)
+        # Find which labels touch the border
+        border_labels = set()
+        h, w = labeled.shape
+        border_labels.update(labeled[0, :].tolist())     # top
+        border_labels.update(labeled[h-1, :].tolist())   # bottom
+        border_labels.update(labeled[:, 0].tolist())      # left
+        border_labels.update(labeled[:, w-1].tolist())    # right
+        border_labels.discard(0)  # 0 is not a label
+
+        # Count holes preserved
+        hole_count = 0
+        for lbl in range(1, num_features + 1):
+            if lbl not in border_labels:
+                # This is an interior hole — ensure it stays False
+                hole_pixels = (labeled == lbl).sum()
+                if hole_pixels > 5:  # ignore very tiny holes (< 5px)
+                    hole_count += 1
+                    # Already False in cleaned, nothing to do
+                else:
+                    # Fill very tiny holes (noise)
+                    cleaned[labeled == lbl] = True
+
+        if hole_count > 0:
+            print(f"[MASK] Preserved {hole_count} interior holes", file=sys.stderr)
+    except ImportError:
+        # scipy not available — fall back to simple cleanup
+        print("[MASK] scipy not available, holes may not be preserved", file=sys.stderr)
+
+    return cleaned
 
 
 # ── Color-based region separation (Step 2) ─────────────────────────
@@ -378,6 +425,94 @@ def generate_underlay(
     )
 
 
+def generate_contour(
+    mask: np.ndarray,
+    pattern: pyembroidery.EmbPattern,
+    width_mm: float,
+    height_mm: float,
+):
+    """Generate a clean running stitch outline around the mask edges.
+    Traces the perimeter of the design for clean, professional borders."""
+    h, w = mask.shape
+    W_emb = int(width_mm * 10)
+    H_emb = int(height_mm * 10)
+
+    def to_emb(px, py):
+        return int(px * W_emb / w), int(py * H_emb / h)
+
+    # Find edge pixels: design pixels adjacent to at least one non-design pixel
+    edge_mask = np.zeros_like(mask, dtype=bool)
+    for dy in [-1, 0, 1]:
+        for dx in [-1, 0, 1]:
+            if dy == 0 and dx == 0:
+                continue
+            shifted = np.roll(np.roll(mask, dy, axis=0), dx, axis=1)
+            # Edge = is design AND has at least one non-design neighbor
+            edge_mask |= (mask & ~shifted)
+
+    # Trace contours using connected component ordering
+    edge_coords = list(zip(*np.where(edge_mask)))  # (y, x) pairs
+    if not edge_coords:
+        return
+
+    # Sort by angle from centroid for a roughly clockwise traversal
+    cy = np.mean([p[0] for p in edge_coords])
+    cx = np.mean([p[1] for p in edge_coords])
+
+    # Group into connected contours using a simple nearest-neighbor chain
+    remaining = set(range(len(edge_coords)))
+    contours = []
+
+    while remaining:
+        # Start a new contour
+        contour = []
+        idx = min(remaining)  # Start from topmost-leftmost point
+        remaining.remove(idx)
+        contour.append(edge_coords[idx])
+
+        # Chain to nearest unvisited neighbor
+        while remaining:
+            cy_cur, cx_cur = contour[-1]
+            best_idx = None
+            best_dist = float('inf')
+            for candidate in remaining:
+                cy_c, cx_c = edge_coords[candidate]
+                d = abs(cy_c - cy_cur) + abs(cx_c - cx_cur)  # Manhattan distance
+                if d < best_dist:
+                    best_dist = d
+                    best_idx = candidate
+            if best_dist > 5:  # Gap too large — start new contour
+                break
+            remaining.remove(best_idx)
+            contour.append(edge_coords[best_idx])
+
+        if len(contour) >= 3:
+            contours.append(contour)
+
+    print(f"[CONTOUR] {len(contours)} contour(s), {sum(len(c) for c in contours)} edge pixels", file=sys.stderr)
+
+    # Generate stitches for each contour (sub-sample every 2 pixels for cleaner lines)
+    for contour in contours:
+        step = max(1, len(contour) // 200)  # Max ~200 stitches per contour
+        sampled = contour[::step]
+        if not sampled:
+            continue
+
+        # Jump to start
+        ey, ex = sampled[0]
+        emb_x, emb_y = to_emb(ex, ey)
+        pattern.add_command(pyembroidery.JUMP, emb_x, emb_y)
+
+        for ey_px, ex_px in sampled:
+            emb_x, emb_y = to_emb(ex_px, ey_px)
+            pattern.add_stitch_absolute(pyembroidery.STITCH, emb_x, emb_y)
+
+        # Close the contour (stitch back to start)
+        ey, ex = sampled[0]
+        emb_x, emb_y = to_emb(ex, ey)
+        pattern.add_stitch_absolute(pyembroidery.STITCH, emb_x, emb_y)
+
+
 # ── Main generator ─────────────────────────────────────────────────
 
 def generate(params: dict, fmt: str, output_path: str) -> str:
@@ -413,10 +548,10 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
 
     if img is not None and HAS_PIL:
 
-        # Resize for embroidery resolution (~3px per mm for quality)
-        scale = 3.0
-        target_w = max(80, int(width_mm * scale))
-        target_h = max(80, int(height_mm * scale))
+        # Resize for embroidery resolution (~5px per mm for quality and hole preservation)
+        scale = 5.0
+        target_w = max(120, int(width_mm * scale))
+        target_h = max(120, int(height_mm * scale))
         img = img.resize((target_w, target_h), Image.LANCZOS)
 
         # Preprocess
@@ -455,6 +590,11 @@ def generate(params: dict, fmt: str, output_path: str) -> str:
             # Main stitches
             print(f"[STITCH] {stitch_type} for '{region.get('name', i)}' angle={angle} density={density}", file=sys.stderr)
             stitches_from_mask(region_mask, pattern, width_mm, height_mm, density, stitch_type, angle)
+
+            # Add contour outline for clean edges (skip for running stitch which IS an outline)
+            if stitch_type not in ("running", "triple"):
+                print(f"[CONTOUR] Adding outline for '{region.get('name', i)}'", file=sys.stderr)
+                generate_contour(region_mask, pattern, width_mm, height_mm)
 
             # Color change between regions
             if i < len(regions) - 1:
