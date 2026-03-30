@@ -94,6 +94,9 @@ export function PipelineTracker({ project }: PipelineTrackerProps) {
           ))}
         </div>
       )}
+
+      {/* Dev tools: Simulate + Diagnose */}
+      <SimulateAndDiagnosePanel project={project} onComplete={() => router.refresh()} />
     </div>
   )
 }
@@ -393,7 +396,7 @@ function PreparationPhase({ project, onAdvance }: { project: Project; onAdvance:
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [params, setParams] = useState<{
-    regions: { name: string; stitch_type: string; density: number; color_name: string; color_hex: string }[]
+    regions: { name: string; stitch_type: string; density: number; color_name: string; color_hex: string; angle?: number; underlay?: boolean }[]
     thread_colors: { index: number; name: string; hex: string }[]
     total_stitches_estimate: number
     width_mm: number
@@ -417,6 +420,9 @@ function PreparationPhase({ project, onAdvance }: { project: Project; onAdvance:
     }
     setParams(data.params)
     setLoading(false)
+  }
+
+  function goToPreview() {
     router.refresh()
     onAdvance()
   }
@@ -452,10 +458,83 @@ function PreparationPhase({ project, onAdvance }: { project: Project; onAdvance:
       )}
 
       {params && (
-        <div className="space-y-3">
-          <div className="rounded-lg bg-green-50 p-4 text-sm text-green-800">
-            Preparacion completa — avanzando a la vista previa...
+        <div className="space-y-4">
+          <div className="rounded-lg bg-green-50 p-3 text-sm font-medium text-green-800">
+            GPT-4o asigno {params.regions.length} regiones de puntada
           </div>
+
+          {/* Regions table */}
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left text-xs text-gray-500">
+                <tr>
+                  <th className="px-3 py-2">#</th>
+                  <th className="px-3 py-2">Region</th>
+                  <th className="px-3 py-2">Tipo</th>
+                  <th className="px-3 py-2">Color</th>
+                  <th className="px-3 py-2">Densidad</th>
+                  <th className="px-3 py-2">Angulo</th>
+                  <th className="px-3 py-2">Underlay</th>
+                </tr>
+              </thead>
+              <tbody>
+                {params.regions.map((r, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="px-3 py-2 text-gray-400">{i + 1}</td>
+                    <td className="px-3 py-2 font-medium">{r.name}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${
+                        r.stitch_type === 'tatami' ? 'bg-blue-100 text-blue-700' :
+                        r.stitch_type === 'satin' ? 'bg-purple-100 text-purple-700' :
+                        r.stitch_type === 'running' ? 'bg-orange-100 text-orange-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {r.stitch_type}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3 w-3 rounded-full border" style={{ backgroundColor: r.color_hex }} />
+                        {r.color_name}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">{r.density} st/mm</td>
+                    <td className="px-3 py-2">{r.angle ?? 0}°</td>
+                    <td className="px-3 py-2">{r.underlay ? 'Si' : 'No'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Thread colors */}
+          <div className="flex flex-wrap gap-2">
+            {params.thread_colors.map((tc, i) => (
+              <span key={i} className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tc.hex }} />
+                {tc.name}
+              </span>
+            ))}
+          </div>
+
+          {/* Stats */}
+          <div className="flex gap-4 text-xs text-gray-500">
+            <span>Puntadas estimadas: <strong className="text-gray-700">{params.total_stitches_estimate?.toLocaleString()}</strong></span>
+            <span>Dimensiones: <strong className="text-gray-700">{params.width_mm}×{params.height_mm}mm</strong></span>
+          </div>
+
+          {params.notes && (
+            <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-600">
+              <span className="font-medium">Nota IA:</span> {params.notes}
+            </div>
+          )}
+
+          <button
+            onClick={goToPreview}
+            className="w-full rounded-lg bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700"
+          >
+            Ver vista previa →
+          </button>
         </div>
       )}
     </div>
@@ -464,15 +543,26 @@ function PreparationPhase({ project, onAdvance }: { project: Project; onAdvance:
 
 // ─── Generation phase ─────────────────────────────────────────────
 
+interface DebugInfo {
+  mask_method: string
+  image_info: string
+  regions: { name: string; hex: string; pixels: number; pct: number }[]
+  total_stitches: number
+  log_lines: string[]
+}
+
 function GenerationPhase({ project, onAdvance }: { project: Project; onAdvance: () => void }) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{
     download_url: string
     format: string
+    size_bytes: number
     summary: { total_stitches: number; colors: number; dimensions: string }
+    debug: DebugInfo
   } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showLog, setShowLog] = useState(false)
 
   async function generate() {
     setLoading(true)
@@ -490,8 +580,18 @@ function GenerationPhase({ project, onAdvance }: { project: Project; onAdvance: 
     }
     setResult(data)
     setLoading(false)
+  }
+
+  function goToDelivery() {
     router.refresh()
     onAdvance()
+  }
+
+  const maskBadge = (method: string) => {
+    if (method === 'alpha') return { label: 'Canal alfa', color: 'bg-green-100 text-green-700' }
+    if (method === 'edge') return { label: 'Deteccion de bordes', color: 'bg-yellow-100 text-yellow-700' }
+    if (method === 'brightness') return { label: 'Brillo (fallback)', color: 'bg-orange-100 text-orange-700' }
+    return { label: method, color: 'bg-gray-100 text-gray-700' }
   }
 
   return (
@@ -499,7 +599,7 @@ function GenerationPhase({ project, onAdvance }: { project: Project; onAdvance: 
       {!result && !loading && (
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Se generara el paquete de parametros de bordado con todos los datos de tu diseno.
+            Se generara el archivo de bordado real (.{project.export_format}) usando pyembroidery.
           </p>
           <button
             onClick={generate}
@@ -525,8 +625,87 @@ function GenerationPhase({ project, onAdvance }: { project: Project; onAdvance: 
       )}
 
       {result && (
-        <div className="rounded-lg bg-green-50 p-4 text-sm text-green-800">
-          Listo — avanzando a entrega...
+        <div className="space-y-4">
+          <div className="rounded-lg bg-green-50 p-4">
+            <p className="font-medium text-green-800">Archivo generado exitosamente</p>
+            <p className="mt-1 text-sm text-green-700">
+              {result.format} · {(result.size_bytes / 1024).toFixed(1)} KB · {result.summary.total_stitches.toLocaleString()} puntadas · {result.summary.colors} colores · {result.summary.dimensions}
+            </p>
+          </div>
+
+          {/* Debug report */}
+          {result.debug && (
+            <div className="space-y-3 rounded-lg border p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Reporte de generacion</p>
+
+              {/* Mask method */}
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-500">Metodo de mascara:</span>
+                <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${maskBadge(result.debug.mask_method).color}`}>
+                  {maskBadge(result.debug.mask_method).label}
+                </span>
+              </div>
+
+              {result.debug.image_info && (
+                <p className="text-xs text-gray-500">Imagen: {result.debug.image_info}</p>
+              )}
+
+              {/* Region breakdown */}
+              {result.debug.regions.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-gray-500">Pixeles por region:</p>
+                  {result.debug.regions.map((r, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs">
+                      <span className="h-2.5 w-2.5 rounded-full border" style={{ backgroundColor: r.hex }} />
+                      <span className="w-32 truncate font-medium">{r.name}</span>
+                      <div className="flex-1 rounded-full bg-gray-100">
+                        <div
+                          className="h-2 rounded-full bg-blue-400"
+                          style={{ width: `${Math.max(r.pct, 2)}%` }}
+                        />
+                      </div>
+                      <span className="w-16 text-right text-gray-500">{r.pixels.toLocaleString()} px ({r.pct}%)</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Stitch count check */}
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-500">Puntadas reales:</span>
+                <span className={`font-medium ${
+                  result.debug.total_stitches < 100 ? 'text-red-600' :
+                  result.debug.total_stitches < 1000 ? 'text-yellow-600' :
+                  'text-green-600'
+                }`}>
+                  {result.debug.total_stitches.toLocaleString()}
+                </span>
+                {result.debug.total_stitches < 100 && (
+                  <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700">Posible error: muy pocas puntadas</span>
+                )}
+              </div>
+
+              {/* Collapsible raw log */}
+              <button
+                onClick={() => setShowLog(!showLog)}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                {showLog ? 'Ocultar log completo ▲' : 'Ver log completo ▼'}
+              </button>
+              {showLog && (
+                <pre className="max-h-48 overflow-auto rounded bg-gray-900 p-3 text-xs text-green-400">
+                  {result.debug.log_lines.join('\n')}
+                </pre>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={goToDelivery}
+            className="w-full rounded-lg bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700"
+          >
+            Continuar a descarga →
+          </button>
         </div>
       )}
     </div>
@@ -615,7 +794,7 @@ function DeliveryPhase({ project }: { project: Project }) {
   return (
     <div className="space-y-4">
       <div className="rounded-lg bg-green-50 p-4">
-        <p className="font-medium text-green-800">¡Diseno completado!</p>
+        <p className="font-medium text-green-800">Diseno completado!</p>
         <p className="mt-1 text-sm text-green-700">
           Maquina: {project.machine_brand} · Formato: {project.export_format}
         </p>
@@ -626,16 +805,201 @@ function DeliveryPhase({ project }: { project: Project }) {
         disabled={downloading}
         className="flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 font-medium text-white disabled:opacity-60 hover:bg-green-700"
       >
-        {downloading ? 'Preparando descarga...' : 'Descargar parametros de bordado'}
+        {downloading ? 'Preparando descarga...' : 'Descargar archivo de bordado'}
       </button>
+    </div>
+  )
+}
 
-      <div className="rounded-lg bg-yellow-50 p-3 text-xs text-yellow-800">
-        <p className="font-medium">Proximo paso: archivo {project.export_format} real</p>
-        <p className="mt-1">
-          Para generar el archivo binario listo para tu maquina, ejecuta{' '}
-          <code className="rounded bg-yellow-100 px-1">npm run workers:up</code> y vuelve a este proyecto.
-        </p>
+// ─── Simulate & Diagnose Panel ────────────────────────────────────
+
+interface SimStep {
+  phase: string
+  ok: boolean
+  duration_ms: number
+  output: Record<string, unknown>
+  error?: string
+}
+
+interface DiagnosePhase {
+  phase: string
+  status: string
+  details: Record<string, unknown>
+}
+
+function SimulateAndDiagnosePanel({ project, onComplete }: { project: Project; onComplete: () => void }) {
+  const [simulating, setSimulating] = useState(false)
+  const [simResult, setSimResult] = useState<{
+    success: boolean
+    steps: SimStep[]
+    total_duration_ms: number
+    final_download_url?: string
+    summary?: Record<string, unknown>
+    stopped_at?: string
+  } | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
+  const [diagnosis, setDiagnosis] = useState<{
+    project: Record<string, string>
+    phases: DiagnosePhase[]
+    problems: string[]
+  } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function runSimulation() {
+    setSimulating(true)
+    setError(null)
+    setSimResult(null)
+    try {
+      const res = await fetch('/api/pipeline/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: project.id }),
+      })
+      const data = await res.json()
+      if (!res.ok && !data.steps) {
+        setError(data.error ?? 'Error de simulacion')
+      } else {
+        setSimResult(data)
+        if (data.success) onComplete()
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error desconocido')
+    }
+    setSimulating(false)
+  }
+
+  async function runDiagnosis() {
+    setDiagnosing(true)
+    setError(null)
+    setDiagnosis(null)
+    try {
+      const res = await fetch(`/api/pipeline/diagnose?project_id=${project.id}`)
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error ?? 'Error de diagnostico')
+      } else {
+        setDiagnosis(data)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error desconocido')
+    }
+    setDiagnosing(false)
+  }
+
+  const phaseLabel: Record<string, string> = {
+    analyze: 'Analisis',
+    approve: 'Aprobacion',
+    extract: 'Extraccion',
+    prepare: 'Preparacion',
+    generate: 'Generacion',
+    onboarding: 'Onboarding',
+    ingestion: 'Ingestion',
+    extraction: 'Extraccion',
+    preparation: 'Preparacion',
+    generation: 'Generacion',
+  }
+
+  return (
+    <div className="space-y-4 rounded-xl border border-dashed border-gray-300 p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Herramientas de diagnostico</p>
+
+      <div className="flex gap-2">
+        <button
+          onClick={runSimulation}
+          disabled={simulating || diagnosing}
+          className="flex-1 rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm font-medium text-purple-700 disabled:opacity-40 hover:bg-purple-100"
+        >
+          {simulating ? 'Simulando...' : 'Simular pipeline completo'}
+        </button>
+        <button
+          onClick={runDiagnosis}
+          disabled={simulating || diagnosing}
+          className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 disabled:opacity-40 hover:bg-gray-50"
+        >
+          {diagnosing ? 'Diagnosticando...' : 'Diagnosticar proyecto'}
+        </button>
       </div>
+
+      {error && (
+        <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
+      )}
+
+      {/* Simulation results */}
+      {simResult && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-gray-500">
+            Simulacion {simResult.success ? 'completada' : 'fallida'} en {(simResult.total_duration_ms / 1000).toFixed(1)}s
+          </p>
+          {simResult.steps.map((step, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm">
+              <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs text-white ${step.ok ? 'bg-green-500' : 'bg-red-500'}`}>
+                {step.ok ? '✓' : '✗'}
+              </span>
+              <span className="w-24 font-medium">{phaseLabel[step.phase] ?? step.phase}</span>
+              <span className="text-xs text-gray-400">({(step.duration_ms / 1000).toFixed(1)}s)</span>
+              {step.ok && step.output && (
+                <span className="text-xs text-gray-500">
+                  {step.phase === 'analyze' && `calidad: ${(step.output.analysis as Record<string, string>)?.image_quality ?? '?'}, colores: ${(step.output.analysis as Record<string, number>)?.estimated_thread_colors ?? '?'}`}
+                  {step.phase === 'prepare' && `${(step.output.params as Record<string, unknown[]>)?.regions?.length ?? 0} regiones`}
+                  {step.phase === 'generate' && `${(step.output.debug as Record<string, number>)?.total_stitches ?? 0} puntadas, mascara: ${(step.output.debug as Record<string, string>)?.mask_method ?? '?'}`}
+                </span>
+              )}
+              {!step.ok && step.error && (
+                <span className="text-xs text-red-600">{step.error}</span>
+              )}
+            </div>
+          ))}
+          {simResult.final_download_url && (
+            <a
+              href={simResult.final_download_url}
+              download={`${project.name}.${project.export_format.toLowerCase()}`}
+              className="mt-2 inline-block rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+            >
+              Descargar archivo generado
+            </a>
+          )}
+        </div>
+      )}
+
+      {/* Diagnosis results */}
+      {diagnosis && (
+        <div className="space-y-3">
+          {/* Problems */}
+          {diagnosis.problems.length > 0 && (
+            <div className="rounded-lg bg-red-50 p-3">
+              <p className="text-xs font-medium text-red-700">Problemas detectados:</p>
+              {diagnosis.problems.map((p, i) => (
+                <p key={i} className="mt-1 text-xs text-red-600">• {p}</p>
+              ))}
+            </div>
+          )}
+          {diagnosis.problems.length === 0 && (
+            <div className="rounded-lg bg-green-50 p-3 text-xs font-medium text-green-700">
+              Sin problemas detectados
+            </div>
+          )}
+
+          {/* Phase breakdown */}
+          {diagnosis.phases.map((phase, i) => (
+            <div key={i} className="rounded-lg border p-3">
+              <div className="flex items-center gap-2">
+                <span className={`h-2 w-2 rounded-full ${
+                  phase.status === 'complete' ? 'bg-green-500' :
+                  phase.status === 'missing' ? 'bg-red-500' :
+                  'bg-gray-300'
+                }`} />
+                <span className="text-sm font-medium">{phaseLabel[phase.phase] ?? phase.phase}</span>
+                <span className="text-xs text-gray-400">({phase.status})</span>
+              </div>
+              {phase.details && (
+                <pre className="mt-1 max-h-24 overflow-auto text-xs text-gray-500">
+                  {JSON.stringify(phase.details, null, 2)}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

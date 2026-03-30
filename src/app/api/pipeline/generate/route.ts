@@ -8,7 +8,12 @@ import { writeFile, readFile, unlink } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-function runPythonGenerator(params: object, fmt: string): Promise<Buffer> {
+interface GeneratorResult {
+  buffer: Buffer
+  debugLog: string
+}
+
+function runPythonGenerator(params: object, fmt: string): Promise<GeneratorResult> {
   return new Promise((resolve, reject) => {
     const outputPath = join(tmpdir(), `bordai_${Date.now()}.${fmt.toLowerCase()}`)
     const pythonExe = process.platform === 'win32' ? 'python' : 'python3'
@@ -38,12 +43,42 @@ function runPythonGenerator(params: object, fmt: string): Promise<Buffer> {
         }
         const fileBuffer = await readFile(outputPath)
         await unlink(outputPath).catch(() => {})
-        resolve(fileBuffer)
+        resolve({ buffer: fileBuffer, debugLog: stderr })
       } catch (e) {
         reject(new Error(`Failed to read output: ${stderr}`))
       }
     })
   })
+}
+
+function parseDebugLog(raw: string) {
+  const lines = raw.split('\n').filter(l => l.trim())
+  let maskMethod = 'unknown'
+  const regions: { name: string; hex: string; pixels: number; pct: number }[] = []
+  let totalStitches = 0
+  let imageInfo = ''
+
+  for (const line of lines) {
+    if (line.includes('[MASK]')) {
+      if (line.includes('alpha')) maskMethod = 'alpha'
+      else if (line.includes('Edge-based')) maskMethod = 'edge'
+      else if (line.includes('Fallback')) maskMethod = 'brightness'
+      else if (line.includes('Detected background')) maskMethod = 'edge'
+    }
+    if (line.includes('[COLOR]')) {
+      const m = line.match(/Region '(.+?)' \((.+?)\): (\d+) px \((\d+)%\)/)
+      if (m) regions.push({ name: m[1], hex: m[2], pixels: parseInt(m[3]), pct: parseInt(m[4]) })
+    }
+    if (line.includes('[DONE]')) {
+      const m = line.match(/(\d+) stitches/)
+      if (m) totalStitches = parseInt(m[1])
+    }
+    if (line.includes('[IMG]')) {
+      imageInfo = line.replace(/.*\[IMG\]\s*/, '')
+    }
+  }
+
+  return { maskMethod, regions, totalStitches, imageInfo, logLines: lines }
 }
 
 export async function POST(request: Request) {
@@ -115,12 +150,17 @@ export async function POST(request: Request) {
 
   // Generate real embroidery file with pyembroidery
   let fileBuffer: Buffer
+  let debugLog = ''
   try {
-    fileBuffer = await runPythonGenerator(embroideryParams, project.export_format)
+    const result = await runPythonGenerator(embroideryParams, project.export_format)
+    fileBuffer = result.buffer
+    debugLog = result.debugLog
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: 'File generation failed: ' + message }, { status: 500 })
   }
+
+  const debug = parseDebugLog(debugLog)
 
   const fmt = project.export_format.toLowerCase()
   const storagePath = `${user.id}/${project_id}/generation/design.${fmt}`
@@ -152,6 +192,10 @@ export async function POST(request: Request) {
       format: project.export_format,
       size_bytes: fileBuffer.length,
       status: 'generated',
+      debug_mask_method: debug.maskMethod,
+      debug_total_stitches: debug.totalStitches,
+      debug_regions: debug.regions,
+      debug_log: debug.logLines,
     },
   })
 
@@ -168,9 +212,16 @@ export async function POST(request: Request) {
     format: project.export_format,
     size_bytes: fileBuffer.length,
     summary: {
-      total_stitches: digitization.total_stitches_estimate ?? 0,
+      total_stitches: debug.totalStitches || (digitization.total_stitches_estimate ?? 0),
       colors: digitization.thread_colors?.length ?? 0,
       dimensions: `${digitization.width_mm ?? 0}×${digitization.height_mm ?? 0}mm`,
+    },
+    debug: {
+      mask_method: debug.maskMethod,
+      image_info: debug.imageInfo,
+      regions: debug.regions,
+      total_stitches: debug.totalStitches,
+      log_lines: debug.logLines,
     },
   })
 }
