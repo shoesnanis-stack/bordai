@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>BordAI — Organigrama del Pipeline</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f8f9fa; padding: 40px 20px; color: #1a1a2e; }
+  h1 { text-align: center; font-size: 28px; margin-bottom: 8px; }
+  .subtitle { text-align: center; color: #666; margin-bottom: 40px; font-size: 14px; }
+
+  .pipeline { display: flex; flex-direction: column; align-items: center; gap: 0; max-width: 1100px; margin: 0 auto; }
+
+  .arrow-down { width: 4px; height: 40px; background: #ddd; position: relative; margin: 0 auto; }
+  .arrow-down::after { content: ''; position: absolute; bottom: -8px; left: -6px; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 10px solid #ddd; }
+
+  .phase { width: 100%; border-radius: 16px; padding: 28px; position: relative; margin: 0; }
+  .phase-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .phase-badge { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; color: white; flex-shrink: 0; }
+  .phase-title { font-size: 20px; font-weight: 700; }
+  .phase-subtitle { font-size: 13px; color: #666; }
+
+  .columns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .col { background: white; border-radius: 10px; padding: 14px; border: 1px solid #e8e8e8; }
+  .col-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-bottom: 8px; font-weight: 600; }
+  .col p { font-size: 13px; line-height: 1.5; color: #444; }
+  .col ul { font-size: 13px; line-height: 1.6; color: #444; padding-left: 16px; }
+
+  .agent-box { background: white; border: 2px solid; border-radius: 10px; padding: 14px; margin-top: 12px; }
+  .agent-name { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  .agent-desc { font-size: 12px; color: #555; }
+
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+  .tag-gpt { background: #e8f5e9; color: #2e7d32; }
+  .tag-python { background: #e3f2fd; color: #1565c0; }
+  .tag-user { background: #fff3e0; color: #e65100; }
+  .tag-auto { background: #f3e5f5; color: #7b1fa2; }
+  .tag-db { background: #fce4ec; color: #c62828; }
+
+  /* Phase colors */
+  .phase-f0 { background: #f0f4ff; border: 2px solid #c5cae9; }
+  .phase-f0 .phase-badge { background: #5c6bc0; }
+  .phase-f1 { background: #e8f5e9; border: 2px solid #a5d6a7; }
+  .phase-f1 .phase-badge { background: #43a047; }
+  .phase-f2 { background: #fff8e1; border: 2px solid #ffe082; }
+  .phase-f2 .phase-badge { background: #ffa000; }
+  .phase-f3 { background: #e3f2fd; border: 2px solid #90caf9; }
+  .phase-f3 .phase-badge { background: #1e88e5; }
+  .phase-f4 { background: #f3e5f5; border: 2px solid #ce93d8; }
+  .phase-f4 .phase-badge { background: #8e24aa; }
+  .phase-f5 { background: #fce4ec; border: 2px solid #ef9a9a; }
+  .phase-f5 .phase-badge { background: #e53935; }
+  .phase-f6 { background: #e0f2f1; border: 2px solid #80cbc4; }
+  .phase-f6 .phase-badge { background: #00897b; }
+
+  .f5-internal { background: #fff5f5; border-radius: 10px; padding: 16px; margin-top: 12px; border: 1px dashed #ef9a9a; }
+  .f5-step { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .f5-num { width: 24px; height: 24px; border-radius: 50%; background: #e53935; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .f5-text { font-size: 13px; color: #444; line-height: 1.4; }
+  .f5-text strong { color: #c62828; }
+</style>
+</head>
+<body>
+
+<h1>BordAI — Organigrama del Pipeline</h1>
+<p class="subtitle">Flujo completo desde que el cliente sube su imagen hasta que descarga el archivo de bordado</p>
+
+<div class="pipeline">
+
+  <!-- F0 -->
+  <div class="phase phase-f0">
+    <div class="phase-header">
+      <div class="phase-badge">F0</div>
+      <div>
+        <div class="phase-title">ONBOARDING <span class="tag tag-user">Usuario</span></div>
+        <div class="phase-subtitle">El cliente configura su proyecto</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <div class="col-title">Quien trabaja</div>
+        <p><strong>El cliente</strong> en el frontend. No hay IA ni Python aqui.</p>
+      </div>
+      <div class="col">
+        <div class="col-title">Que hace</div>
+        <ul>
+          <li>Elige superficie (gorra, camisa, chamarra, parche)</li>
+          <li>Elige tamano de aro (4x4, 5x7, 6x10...)</li>
+          <li>Elige maquina (Tajima, Brother, Janome...)</li>
+          <li>Sube imagen del diseno</li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="col-title">Que produce</div>
+        <p>Imagen guardada en Supabase Storage. Registro en tabla <code>project_files</code> tipo "original".</p>
+        <p style="margin-top:8px"><strong>Avanza a F1</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- F1 -->
+  <div class="phase phase-f1">
+    <div class="phase-header">
+      <div class="phase-badge">F1</div>
+      <div>
+        <div class="phase-title">COMPRENSION <span class="tag tag-gpt">GPT-4o Vision</span></div>
+        <div class="phase-subtitle">La IA analiza la imagen y dice que entendio</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <div class="col-title">Quien trabaja</div>
+        <div class="agent-box" style="border-color: #43a047;">
+          <div class="agent-name">Agente: GPT-4o Vision</div>
+          <div class="agent-desc">Recibe la imagen + config del proyecto. Le dice al cliente "Entendi que quieres bordar un logo de LA en negro sobre camisa".</div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-title">Que hace</div>
+        <ul>
+          <li>Mira la imagen con vision</li>
+          <li>Identifica elementos (logo, texto, fondo...)</li>
+          <li>Dice que mantener y que descartar</li>
+          <li>Evalua calidad (good/poor/unusable)</li>
+          <li>Estima cuantos colores de hilo</li>
+          <li>Evalua complejidad</li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="col-title">Que produce</div>
+        <p><strong>Brief</strong> guardado en tabla <code>briefs</code>:</p>
+        <ul>
+          <li>Texto de lo que entendio</li>
+          <li>Lista: mantener / descartar</li>
+          <li>Calidad + complejidad</li>
+          <li>N colores estimados</li>
+        </ul>
+        <p style="margin-top:8px"><strong>El cliente aprueba o re-analiza</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- F2 -->
+  <div class="phase phase-f2">
+    <div class="phase-header">
+      <div class="phase-badge">F2</div>
+      <div>
+        <div class="phase-title">EXTRACCION <span class="tag tag-auto">Automatico / Skip</span></div>
+        <div class="phase-subtitle">Separar el diseno del fondo (pendiente SAM)</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <div class="col-title">Quien trabaja</div>
+        <p><strong>Nadie todavia</strong> — el cliente da click en "Continuar" y se salta este paso.</p>
+        <p style="margin-top:8px;color:#e65100;font-size:12px">FUTURO: SAM (segmentacion IA) + Real-ESRGAN (mejora calidad)</p>
+      </div>
+      <div class="col">
+        <div class="col-title">Que hace</div>
+        <ul>
+          <li>Copia la imagen original como "extracted"</li>
+          <li>Marca <code>skipped_extraction: true</code></li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="col-title">Que produce</div>
+        <p>Registro en <code>project_files</code> tipo "extracted" (misma imagen).</p>
+        <p style="margin-top:8px"><strong>Avanza a F3</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- F3 -->
+  <div class="phase phase-f3">
+    <div class="phase-header">
+      <div class="phase-badge">F3</div>
+      <div>
+        <div class="phase-title">PREPARACION <span class="tag tag-gpt">GPT-4o Vision</span></div>
+        <div class="phase-subtitle">La IA asigna puntadas, colores y angulos a cada region</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <div class="col-title">Quien trabaja</div>
+        <div class="agent-box" style="border-color: #1e88e5;">
+          <div class="agent-name">Agente: GPT-4o Vision (Digitalizador)</div>
+          <div class="agent-desc">Recibe la imagen + tamano del aro. Actua como digitalizador profesional: decide que tipo de puntada va en cada parte del diseno.</div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-title">Que hace</div>
+        <ul>
+          <li>Divide el diseno en regiones</li>
+          <li>Asigna tipo: tatami / satin / running</li>
+          <li>Asigna color hex REAL de los pixeles</li>
+          <li>Asigna densidad (4-6 st/mm)</li>
+          <li>Asigna angulo de relleno</li>
+          <li>Decide si lleva underlay</li>
+          <li>Calcula dimensiones en mm</li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="col-title">Que produce</div>
+        <p>JSON guardado en <code>project_files</code> metadata tipo "vectorized":</p>
+        <ul>
+          <li>Array de regiones con params</li>
+          <li>Lista de colores de hilo</li>
+          <li>Estimacion de puntadas</li>
+          <li>Dimensiones width x height mm</li>
+        </ul>
+        <p style="margin-top:8px"><strong>El cliente ve la tabla y avanza</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- F4 -->
+  <div class="phase phase-f4">
+    <div class="phase-header">
+      <div class="phase-badge">F4</div>
+      <div>
+        <div class="phase-title">VISTA PREVIA <span class="tag tag-user">Usuario</span></div>
+        <div class="phase-subtitle">El cliente revisa y aprueba antes de generar</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <div class="col-title">Quien trabaja</div>
+        <p><strong>El cliente</strong> revisa el preview. No hay IA ni Python.</p>
+      </div>
+      <div class="col">
+        <div class="col-title">Que ve</div>
+        <ul>
+          <li>Imagen original</li>
+          <li>Tabla de regiones + colores</li>
+          <li>Tamano real en mm</li>
+          <li>N colores de hilo</li>
+          <li>Boton "Aprobar"</li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="col-title">Que produce</div>
+        <p>Aprobacion del cliente. El proyecto avanza a F5.</p>
+        <p style="margin-top:8px"><strong>Sin aprobacion NO se genera</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- F5 -->
+  <div class="phase phase-f5">
+    <div class="phase-header">
+      <div class="phase-badge">F5</div>
+      <div>
+        <div class="phase-title">GENERACION <span class="tag tag-python">Python Engine v4</span></div>
+        <div class="phase-subtitle">El motor genera el archivo de bordado real (.DST / .PES / .JEF)</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <div class="col-title">Quien trabaja</div>
+        <div class="agent-box" style="border-color: #e53935;">
+          <div class="agent-name">Agente: Python (generate_embroidery.py v4)</div>
+          <div class="agent-desc">Recibe imagen + parametros de F3 + perfil de tela. Genera las coordenadas exactas de cada puntada que la maquina va a coser.</div>
+        </div>
+        <div class="agent-box" style="border-color: #e53935; margin-top: 8px;">
+          <div class="agent-name">Sub-agente: Perfil de Tela (perfiles.py)</div>
+          <div class="agent-desc">Dice los parametros segun la superficie: densidad, compensacion, tipo de underlay, umbral de corte, estabilizador recomendado.</div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-title">Pasos internos del Python</div>
+        <div class="f5-internal">
+          <div class="f5-step"><div class="f5-num">1</div><div class="f5-text"><strong>Carga perfil</strong> — shirt/cap/jacket/patch</div></div>
+          <div class="f5-step"><div class="f5-num">2</div><div class="f5-text"><strong>Lee imagen</strong> del archivo temporal</div></div>
+          <div class="f5-step"><div class="f5-num">3</div><div class="f5-text"><strong>Crea mascara</strong> — separa diseno del fondo (alpha / binario / bordes)</div></div>
+          <div class="f5-step"><div class="f5-num">4</div><div class="f5-text"><strong>Preserva huecos</strong> — detecta agujeros internos (ej: hueco de la A)</div></div>
+          <div class="f5-step"><div class="f5-num">5</div><div class="f5-text"><strong>Separa colores</strong> — crea mascara por region/color</div></div>
+          <div class="f5-step"><div class="f5-num">6</div><div class="f5-text"><strong>Ordena</strong> — fills primero, luego satins, luego contornos. Claros antes que oscuros</div></div>
+          <div class="f5-step"><div class="f5-num">7</div><div class="f5-text"><strong>Por cada region:</strong></div></div>
+          <div style="margin-left: 34px; font-size: 12px; color: #555; line-height: 1.7;">
+            a. COLOR_BREAK si cambia hilo<br>
+            b. TIE-IN (3 puntadas de seguro)<br>
+            c. UNDERLAY (zigzag+edge / edge / center segun perfil)<br>
+            d. PUNTADAS PRINCIPALES (scanline + angulo + pull compensation)<br>
+            e. CONTORNO (running stitch en borde)<br>
+            f. TIE-OFF (3 puntadas de cierre)
+          </div>
+          <div class="f5-step" style="margin-top:8px"><div class="f5-num">8</div><div class="f5-text"><strong>TRIM</strong> — corta hilo en saltos > 3mm</div></div>
+          <div class="f5-step"><div class="f5-num">9</div><div class="f5-text"><strong>Valida</strong> — cuenta puntadas, verifica aro, colores</div></div>
+          <div class="f5-step"><div class="f5-num">10</div><div class="f5-text"><strong>Exporta</strong> — pyembroidery escribe .DST/.PES/.JEF</div></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-title">Que produce</div>
+        <ul>
+          <li>Archivo .DST/.PES/.JEF subido a Storage</li>
+          <li>Debug logs (mascara, regiones, puntadas)</li>
+          <li>Metadata con stats completas</li>
+        </ul>
+        <p style="margin-top:8px"><strong>Panel de diagnostico visible en UI</strong></p>
+        <p style="margin-top:8px">El cliente ve: metodo de mascara, pixeles por region, total de puntadas, log de Python.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down"></div>
+
+  <!-- F6 -->
+  <div class="phase phase-f6">
+    <div class="phase-header">
+      <div class="phase-badge">F6</div>
+      <div>
+        <div class="phase-title">ENTREGA <span class="tag tag-user">Usuario</span></div>
+        <div class="phase-subtitle">El cliente descarga su archivo de bordado</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <div class="col-title">Quien trabaja</div>
+        <p><strong>El cliente</strong> descarga. Solo se genera una URL firmada de Supabase Storage.</p>
+      </div>
+      <div class="col">
+        <div class="col-title">Que hace</div>
+        <ul>
+          <li>Genera URL firmada (1 hora)</li>
+          <li>Descarga el archivo al navegador</li>
+          <li>Nombre: {proyecto}.{formato}</li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="col-title">Que produce</div>
+        <p>Archivo listo para cargar en la maquina de bordado.</p>
+        <p style="margin-top:8px;font-weight:700;color:#00897b">FIN DEL PIPELINE</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div style="max-width: 1100px; margin: 40px auto 0; padding: 20px; background: white; border-radius: 12px; border: 1px solid #e0e0e0;">
+  <h3 style="margin-bottom: 12px;">Resumen de "Empleados"</h3>
+  <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+    <tr style="background: #f5f5f5;">
+      <th style="padding: 8px; text-align: left; border-bottom: 2px solid #ddd;">Empleado</th>
+      <th style="padding: 8px; text-align: left; border-bottom: 2px solid #ddd;">Rol</th>
+      <th style="padding: 8px; text-align: left; border-bottom: 2px solid #ddd;">Donde trabaja</th>
+      <th style="padding: 8px; text-align: left; border-bottom: 2px solid #ddd;">Fases</th>
+    </tr>
+    <tr>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Cliente</strong></td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">Sube imagen, configura, aprueba, descarga</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">Navegador (Next.js frontend)</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">F0, F1, F2, F4, F6</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;"><span class="tag tag-gpt">GPT-4o Vision</span> <strong>Analista</strong></td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">Mira la imagen, genera brief para el cliente</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">API route /analyze (OpenAI)</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">F1</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;"><span class="tag tag-gpt">GPT-4o Vision</span> <strong>Digitalizador</strong></td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">Asigna puntadas, colores, angulos, densidad</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">API route /prepare (OpenAI)</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">F3</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;"><span class="tag tag-python">Python Engine</span> <strong>Motor v4</strong></td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">Genera el archivo de bordado real con puntadas</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">generate_embroidery.py (child_process)</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">F5</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;"><span class="tag tag-python">Perfil de Tela</span></td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">Define parametros por tipo de superficie</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">perfiles.py (importado por motor)</td>
+      <td style="padding: 8px; border-bottom: 1px solid #eee;">F5</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px;"><span class="tag tag-db">Supabase</span> <strong>Base de datos</strong></td>
+      <td style="padding: 8px;">Guarda todo: proyectos, archivos, briefs, metadata</td>
+      <td style="padding: 8px;">PostgreSQL + Storage (nube)</td>
+      <td style="padding: 8px;">Todas</td>
+    </tr>
+  </table>
+</div>
+
+<div style="max-width: 1100px; margin: 20px auto; padding: 16px; background: #fffde7; border-radius: 8px; border: 1px solid #fff9c4; font-size: 13px; color: #666;">
+  <strong>Para editar este diagrama:</strong> Abre <a href="https://app.diagrams.net" target="_blank">app.diagrams.net</a> (draw.io), crea un nuevo diagrama, y recrea las cajas que necesites modificar. Exporta como PNG o PDF para compartir.
+</div>
+
+</body>
+</html>

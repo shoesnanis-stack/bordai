@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>BordAI — Mockup Admin Panel vs Nodos</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; }
+
+  .header { padding: 20px 30px; background: #1a1a2e; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 20px; color: white; }
+  .header .badge { background: #7c3aed; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; }
+
+  .tabs { display: flex; gap: 0; background: #1a1a2e; padding: 0 30px; border-bottom: 1px solid #333; }
+  .tab { padding: 12px 24px; cursor: pointer; font-size: 14px; color: #888; border-bottom: 2px solid transparent; }
+  .tab.active { color: #7c3aed; border-bottom-color: #7c3aed; }
+  .tab:hover { color: #bbb; }
+
+  .content { padding: 30px; }
+
+  /* ═══ OPCION A: PANEL CON TARJETAS ═══ */
+  .option-label { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #7c3aed; margin-bottom: 16px; font-weight: 600; }
+
+  .pipeline-cards { display: flex; flex-direction: column; gap: 16px; max-width: 900px; }
+
+  .card { background: #1e1e2e; border: 1px solid #333; border-radius: 12px; overflow: hidden; }
+  .card-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #2a2a3a; }
+  .card-left { display: flex; align-items: center; gap: 10px; }
+  .card-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; font-weight: 700; }
+  .card-title { font-size: 14px; font-weight: 600; }
+  .card-subtitle { font-size: 11px; color: #666; }
+  .card-toggle { width: 40px; height: 22px; border-radius: 11px; background: #333; position: relative; cursor: pointer; }
+  .card-toggle.on { background: #22c55e; }
+  .card-toggle::after { content: ''; width: 18px; height: 18px; border-radius: 50%; background: white; position: absolute; top: 2px; left: 2px; transition: 0.2s; }
+  .card-toggle.on::after { left: 20px; }
+
+  .card-body { padding: 14px 18px; display: none; }
+  .card.open .card-body { display: block; }
+
+  .config-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .config-label { width: 140px; font-size: 12px; color: #888; flex-shrink: 0; }
+  .config-input { flex: 1; background: #12121f; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; color: white; font-size: 12px; }
+  .config-select { flex: 1; background: #12121f; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; color: white; font-size: 12px; }
+  .config-textarea { flex: 1; background: #12121f; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; color: #ccc; font-size: 11px; font-family: monospace; min-height: 80px; resize: vertical; }
+
+  .tag-small { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+  .tag-gpt { background: #064e3b; color: #34d399; }
+  .tag-py { background: #1e1b4b; color: #818cf8; }
+  .tag-user { background: #431407; color: #fb923c; }
+
+  /* ═══ OPCION B: NODOS (n8n style) ═══ */
+  .nodes-canvas { background: #12121f; border-radius: 12px; min-height: 500px; position: relative; overflow: hidden; border: 1px solid #333; padding: 30px; }
+  .nodes-grid { background-image: radial-gradient(#222 1px, transparent 1px); background-size: 20px 20px; position: absolute; inset: 0; }
+
+  .node { position: absolute; background: #1e1e2e; border: 2px solid #333; border-radius: 10px; width: 180px; cursor: default; }
+  .node:hover { border-color: #7c3aed; }
+  .node-header { padding: 8px 12px; border-bottom: 1px solid #2a2a3a; display: flex; align-items: center; gap: 6px; }
+  .node-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .node-name { font-size: 12px; font-weight: 600; }
+  .node-body { padding: 8px 12px; font-size: 11px; color: #888; line-height: 1.5; }
+  .node-port { width: 10px; height: 10px; border-radius: 50%; background: #555; border: 2px solid #333; position: absolute; }
+  .node-port.out { right: -6px; top: 50%; transform: translateY(-50%); }
+  .node-port.in { left: -6px; top: 50%; transform: translateY(-50%); }
+
+  .connection { position: absolute; pointer-events: none; }
+  .connection line { stroke: #555; stroke-width: 2; }
+
+  /* ═══ LAYERS PANEL ═══ */
+  .layers-section { margin-top: 30px; max-width: 900px; }
+  .layers-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .layers-header h3 { font-size: 16px; }
+  .btn-sm { padding: 6px 14px; border-radius: 6px; font-size: 12px; border: none; cursor: pointer; font-weight: 600; }
+  .btn-purple { background: #7c3aed; color: white; }
+  .btn-outline { background: transparent; border: 1px solid #555; color: #aaa; }
+
+  .layer { background: #1e1e2e; border: 1px solid #333; border-radius: 10px; margin-bottom: 8px; overflow: hidden; }
+  .layer-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; }
+  .layer-color { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #555; }
+  .layer-name { font-size: 13px; font-weight: 500; flex: 1; }
+  .layer-tags { display: flex; gap: 4px; }
+  .layer-tag { padding: 2px 6px; border-radius: 4px; font-size: 10px; background: #2a2a3a; color: #aaa; }
+  .layer-body { padding: 12px 14px; border-top: 1px solid #2a2a3a; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .layer-field label { display: block; font-size: 10px; color: #666; margin-bottom: 4px; text-transform: uppercase; }
+  .layer-field select, .layer-field input { width: 100%; background: #12121f; border: 1px solid #333; border-radius: 4px; padding: 4px 6px; color: white; font-size: 12px; }
+
+  .separator { border: none; border-top: 1px solid #2a2a3a; margin: 30px 0; }
+
+  /* Templates */
+  .templates { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .template-card { background: #1e1e2e; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; cursor: pointer; width: 200px; }
+  .template-card:hover { border-color: #7c3aed; }
+  .template-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .template-desc { font-size: 11px; color: #666; line-height: 1.4; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>BordAI Admin</h1>
+  <div class="badge">Super Admin</div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('cards')">Opcion A: Panel con Tarjetas</div>
+  <div class="tab" onclick="showTab('nodes')">Opcion B: Nodos (estilo n8n)</div>
+  <div class="tab" onclick="showTab('layers')">Editor de Capas (para ambas opciones)</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!-- OPCION A: PANEL CON TARJETAS                   -->
+<!-- ═══════════════════════════════════════════════ -->
+<div id="tab-cards" class="content">
+  <div class="option-label">Opcion A — Cada paso es una tarjeta que abres y configuras</div>
+
+  <div class="pipeline-cards">
+
+    <!-- F1 Card -->
+    <div class="card open">
+      <div class="card-header">
+        <div class="card-left">
+          <div class="card-icon" style="background:#22c55e">F1</div>
+          <div>
+            <div class="card-title">Comprension <span class="tag-small tag-gpt">GPT-4o</span></div>
+            <div class="card-subtitle">Analiza imagen y genera brief</div>
+          </div>
+        </div>
+        <div class="card-toggle on"></div>
+      </div>
+      <div class="card-body">
+        <div class="config-row">
+          <div class="config-label">Modelo IA</div>
+          <select class="config-select">
+            <option>gpt-4o (recomendado)</option>
+            <option>gpt-4o-mini (mas rapido)</option>
+            <option>claude-3.5-sonnet</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <div class="config-label">Max tokens</div>
+          <input class="config-input" type="number" value="500">
+        </div>
+        <div class="config-row">
+          <div class="config-label">Prompt personalizado</div>
+          <textarea class="config-textarea">Eres un experto en bordado industrial. Analiza esta imagen que un cliente quiere convertir en un diseno de bordado para una {surface}.
+
+Configuracion del proyecto:
+- Superficie: {surface}
+- Tamano del aro: {hoop_size}
+- Maquina: {machine_brand}
+
+Responde UNICAMENTE con JSON...</textarea>
+        </div>
+        <div class="config-row">
+          <div class="config-label">Variables disponibles</div>
+          <div style="font-size:11px;color:#666">{surface}, {hoop_size}, {machine_brand}, {hoop_width}, {hoop_height}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- F2 Card -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-left">
+          <div class="card-icon" style="background:#f59e0b">F2</div>
+          <div>
+            <div class="card-title">Extraccion <span class="tag-small tag-user">Manual/SAM</span></div>
+            <div class="card-subtitle">Separar diseno del fondo</div>
+          </div>
+        </div>
+        <div class="card-toggle"></div>
+      </div>
+      <div class="card-body">
+        <p style="color:#888;font-size:12px">SAM segmentacion — pendiente de implementar</p>
+      </div>
+    </div>
+
+    <!-- F3 Card -->
+    <div class="card open">
+      <div class="card-header">
+        <div class="card-left">
+          <div class="card-icon" style="background:#3b82f6">F3</div>
+          <div>
+            <div class="card-title">Preparacion <span class="tag-small tag-gpt">GPT-4o</span></div>
+            <div class="card-subtitle">Asigna puntadas, colores, angulos</div>
+          </div>
+        </div>
+        <div class="card-toggle on"></div>
+      </div>
+      <div class="card-body">
+        <div class="config-row">
+          <div class="config-label">Prompt digitalizador</div>
+          <textarea class="config-textarea">Eres un experto digitalizador de bordado. Analiza este diseno y genera los parametros de digitalizacion.
+
+REGLAS:
+- Textos y bordes finos: satin
+- Rellenos grandes (>10mm): tatami
+- Contornos: running
+- color_hex DEBE coincidir con el color REAL
+...</textarea>
+        </div>
+        <div class="config-row">
+          <div class="config-label">Modo</div>
+          <select class="config-select">
+            <option>IA sugiere + tu editas en capas</option>
+            <option>IA decide todo (automatico)</option>
+            <option>Tu configuras todo manualmente</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- F5 Card -->
+    <div class="card open">
+      <div class="card-header">
+        <div class="card-left">
+          <div class="card-icon" style="background:#ef4444">F5</div>
+          <div>
+            <div class="card-title">Generacion <span class="tag-small tag-py">Python v4</span></div>
+            <div class="card-subtitle">Motor de puntadas</div>
+          </div>
+        </div>
+        <div class="card-toggle on"></div>
+      </div>
+      <div class="card-body">
+        <div class="config-row">
+          <div class="config-label">Perfil de tela</div>
+          <select class="config-select">
+            <option>shirt — Camisa / Algodon</option>
+            <option>cap — Gorra</option>
+            <option>jacket — Chamarra</option>
+            <option>patch — Parche</option>
+            <option selected>custom — Personalizado</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <div class="config-label">Densidad fill (mm)</div>
+          <input class="config-input" type="number" value="0.40" step="0.05" min="0.35" max="0.55">
+        </div>
+        <div class="config-row">
+          <div class="config-label">Pull compensation</div>
+          <input class="config-input" type="number" value="0.20" step="0.05">
+        </div>
+        <div class="config-row">
+          <div class="config-label">Umbral TRIM (mm)</div>
+          <input class="config-input" type="number" value="3.0" step="0.5">
+        </div>
+        <div class="config-row">
+          <div class="config-label">Underlay fill</div>
+          <select class="config-select">
+            <option>zigzag + edge_run</option>
+            <option>edge_run</option>
+            <option>center_run</option>
+            <option>ninguno</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <div class="config-label">Tie-in puntadas</div>
+          <input class="config-input" type="number" value="3" min="2" max="5">
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!-- OPCION B: NODOS (n8n style)                    -->
+<!-- ═══════════════════════════════════════════════ -->
+<div id="tab-nodes" class="content" style="display:none">
+  <div class="option-label">Opcion B — Nodos conectados tipo n8n (arrastra, conecta, configura)</div>
+
+  <div class="nodes-canvas">
+    <div class="nodes-grid"></div>
+
+    <!-- Node: Imagen -->
+    <div class="node" style="left:30px;top:180px">
+      <div class="node-header">
+        <div class="node-dot" style="background:#22c55e"></div>
+        <div class="node-name">Imagen</div>
+      </div>
+      <div class="node-body">Recibe la imagen<br>del cliente</div>
+      <div class="node-port out"></div>
+    </div>
+
+    <!-- Node: F1 Analisis -->
+    <div class="node" style="left:250px;top:80px">
+      <div class="node-port in"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#22c55e"></div>
+        <div class="node-name">F1: Analisis IA</div>
+      </div>
+      <div class="node-body">GPT-4o Vision<br>Genera brief<br><em style="color:#7c3aed">Click para editar prompt</em></div>
+      <div class="node-port out"></div>
+    </div>
+
+    <!-- Node: F3 Digitalizacion -->
+    <div class="node" style="left:250px;top:260px">
+      <div class="node-port in"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#3b82f6"></div>
+        <div class="node-name">F3: Digitalizador IA</div>
+      </div>
+      <div class="node-body">GPT-4o Vision<br>Asigna puntadas<br><em style="color:#7c3aed">Click para editar prompt</em></div>
+      <div class="node-port out"></div>
+    </div>
+
+    <!-- Node: Separar Capas -->
+    <div class="node" style="left:480px;top:170px;border-color:#f59e0b">
+      <div class="node-port in"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#f59e0b"></div>
+        <div class="node-name">Separar en Capas</div>
+      </div>
+      <div class="node-body">Color + forma<br>Cada capa independiente<br><em style="color:#f59e0b">Editor de capas</em></div>
+      <div class="node-port out" style="top:30%"></div>
+      <div class="node-port out" style="top:50%"></div>
+      <div class="node-port out" style="top:70%"></div>
+    </div>
+
+    <!-- Node: Capa 1 -->
+    <div class="node" style="left:710px;top:60px;width:160px;border-color:#ef4444">
+      <div class="node-port in"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#ef4444"></div>
+        <div class="node-name">Capa: Relleno L</div>
+      </div>
+      <div class="node-body">Tatami 45deg<br>Densidad 0.40<br>Underlay zigzag</div>
+      <div class="node-port out"></div>
+    </div>
+
+    <!-- Node: Capa 2 -->
+    <div class="node" style="left:710px;top:190px;width:160px;border-color:#ef4444">
+      <div class="node-port in"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#ef4444"></div>
+        <div class="node-name">Capa: Relleno A</div>
+      </div>
+      <div class="node-body">Tatami 135deg<br>Densidad 0.40<br>Underlay zigzag</div>
+      <div class="node-port out"></div>
+    </div>
+
+    <!-- Node: Capa 3 -->
+    <div class="node" style="left:710px;top:320px;width:160px;border-color:#ef4444">
+      <div class="node-port in"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#ef4444"></div>
+        <div class="node-name">Capa: Bordes</div>
+      </div>
+      <div class="node-body">Satin 0deg<br>Densidad 75%<br>Pull comp 0.20</div>
+      <div class="node-port out"></div>
+    </div>
+
+    <!-- Node: Merge -->
+    <div class="node" style="left:920px;top:170px;border-color:#8b5cf6">
+      <div class="node-port in" style="top:30%"></div>
+      <div class="node-port in" style="top:50%"></div>
+      <div class="node-port in" style="top:70%"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#8b5cf6"></div>
+        <div class="node-name">Unir Capas</div>
+      </div>
+      <div class="node-body">Ordena capas<br>TRIM + Tie-in<br>Valida resultado</div>
+      <div class="node-port out"></div>
+    </div>
+
+    <!-- Node: Export -->
+    <div class="node" style="left:1120px;top:170px;border-color:#22c55e">
+      <div class="node-port in"></div>
+      <div class="node-header">
+        <div class="node-dot" style="background:#22c55e"></div>
+        <div class="node-name">Exportar .DST</div>
+      </div>
+      <div class="node-body">pyembroidery<br>Formato: Tajima<br>+ Hoja instrucciones</div>
+    </div>
+
+    <!-- Connections (SVG lines) -->
+    <svg class="connection" style="position:absolute;inset:0;width:100%;height:100%">
+      <line x1="216" y1="206" x2="244" y2="120" style="stroke:#555;stroke-width:2"/>
+      <line x1="216" y1="206" x2="244" y2="296" style="stroke:#555;stroke-width:2"/>
+      <line x1="436" y1="120" x2="474" y2="200" style="stroke:#555;stroke-width:2"/>
+      <line x1="436" y1="296" x2="474" y2="220" style="stroke:#555;stroke-width:2"/>
+      <line x1="666" y1="190" x2="704" y2="96" style="stroke:#f59e0b;stroke-width:2"/>
+      <line x1="666" y1="210" x2="704" y2="226" style="stroke:#f59e0b;stroke-width:2"/>
+      <line x1="666" y1="230" x2="704" y2="356" style="stroke:#f59e0b;stroke-width:2"/>
+      <line x1="876" y1="96" x2="914" y2="190" style="stroke:#ef4444;stroke-width:2"/>
+      <line x1="876" y1="226" x2="914" y2="210" style="stroke:#ef4444;stroke-width:2"/>
+      <line x1="876" y1="356" x2="914" y2="230" style="stroke:#ef4444;stroke-width:2"/>
+      <line x1="1106" y1="210" x2="1114" y2="210" style="stroke:#8b5cf6;stroke-width:2"/>
+    </svg>
+  </div>
+
+  <p style="margin-top:16px;font-size:12px;color:#666">
+    En esta vista arrastras nodos, los conectas con lineas, y haces click en cada nodo para editar su configuracion.
+    Puedes agregar/quitar nodos, crear bifurcaciones, y guardar flujos como templates.
+  </p>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!-- EDITOR DE CAPAS (para ambas opciones)          -->
+<!-- ═══════════════════════════════════════════════ -->
+<div id="tab-layers" class="content" style="display:none">
+  <div class="option-label">Editor de Capas — Tu controlas cada parte del diseno</div>
+  <p style="font-size:13px;color:#888;margin-bottom:20px;max-width:700px">
+    Despues de que la IA identifica las regiones, tu ves cada capa aqui y ajustas los parametros
+    con tu experiencia de Wilcom. La IA sugiere, tu corriges. Puedes guardar configuraciones como templates.
+  </p>
+
+  <!-- Templates -->
+  <div style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <h3 style="font-size:14px">Templates guardados</h3>
+      <button class="btn-sm btn-purple">+ Nuevo template</button>
+    </div>
+    <div class="templates">
+      <div class="template-card">
+        <div class="template-name">Logo simple 1 color</div>
+        <div class="template-desc">Tatami 45deg, satin borders, underlay zigzag. Para logos corporativos simples.</div>
+      </div>
+      <div class="template-card">
+        <div class="template-name">Texto corporativo</div>
+        <div class="template-desc">Satin horizontal, center_run underlay. Para texto de uniformes.</div>
+      </div>
+      <div class="template-card">
+        <div class="template-name">Logo multicolor gorra</div>
+        <div class="template-desc">Perfil gorra, pull 0.30, concentric order. Para logos en gorras.</div>
+      </div>
+      <div class="template-card">
+        <div class="template-name">Parche denso</div>
+        <div class="template-desc">Densidad 0.35, edge_run underlay, sin contorno.</div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="separator">
+
+  <!-- Layer list -->
+  <div class="layers-section">
+    <div class="layers-header">
+      <h3>Capas del diseno actual — Logo LA</h3>
+      <div style="display:flex;gap:6px">
+        <button class="btn-sm btn-outline">Fusionar seleccion</button>
+        <button class="btn-sm btn-outline">+ Agregar capa</button>
+        <button class="btn-sm btn-purple">Aplicar template</button>
+      </div>
+    </div>
+
+    <!-- Capa 1 -->
+    <div class="layer">
+      <div class="layer-header">
+        <input type="checkbox" checked>
+        <div style="cursor:grab;color:#555">&#x2630;</div>
+        <div class="layer-color" style="background:#1a1a1a"></div>
+        <div class="layer-name">Relleno letra L</div>
+        <div class="layer-tags">
+          <div class="layer-tag">tatami</div>
+          <div class="layer-tag">45deg</div>
+          <div class="layer-tag">0.40mm</div>
+        </div>
+        <div style="color:#555;font-size:18px;cursor:pointer">&#9660;</div>
+      </div>
+      <div class="layer-body">
+        <div class="layer-field">
+          <label>Tipo puntada</label>
+          <select>
+            <option selected>Tatami (relleno)</option>
+            <option>Satin (columna)</option>
+            <option>Running (contorno)</option>
+            <option>Triple (contorno grueso)</option>
+            <option>Plumetis</option>
+          </select>
+        </div>
+        <div class="layer-field">
+          <label>Angulo</label>
+          <input type="number" value="45" step="5">
+        </div>
+        <div class="layer-field">
+          <label>Densidad (mm)</label>
+          <input type="number" value="0.40" step="0.05" min="0.35" max="0.55">
+        </div>
+        <div class="layer-field">
+          <label>Underlay</label>
+          <select>
+            <option selected>Zigzag + Edge run</option>
+            <option>Edge run</option>
+            <option>Center run</option>
+            <option>Ninguno</option>
+          </select>
+        </div>
+        <div class="layer-field">
+          <label>Pull compensation</label>
+          <input type="number" value="0.20" step="0.05">
+        </div>
+        <div class="layer-field">
+          <label>Color hex</label>
+          <input type="text" value="#1A1A1A">
+        </div>
+      </div>
+    </div>
+
+    <!-- Capa 2 -->
+    <div class="layer">
+      <div class="layer-header">
+        <input type="checkbox" checked>
+        <div style="cursor:grab;color:#555">&#x2630;</div>
+        <div class="layer-color" style="background:#1a1a1a"></div>
+        <div class="layer-name">Relleno letra A</div>
+        <div class="layer-tags">
+          <div class="layer-tag">tatami</div>
+          <div class="layer-tag">135deg</div>
+          <div class="layer-tag">0.40mm</div>
+        </div>
+        <div style="color:#555;font-size:18px;cursor:pointer">&#9660;</div>
+      </div>
+    </div>
+
+    <!-- Capa 3 -->
+    <div class="layer">
+      <div class="layer-header">
+        <input type="checkbox" checked>
+        <div style="cursor:grab;color:#555">&#x2630;</div>
+        <div class="layer-color" style="background:#1a1a1a"></div>
+        <div class="layer-name">Borde exterior L+A</div>
+        <div class="layer-tags">
+          <div class="layer-tag">satin</div>
+          <div class="layer-tag">0deg</div>
+          <div class="layer-tag">75%</div>
+        </div>
+        <div style="color:#555;font-size:18px;cursor:pointer">&#9660;</div>
+      </div>
+    </div>
+
+    <!-- Capa 4 -->
+    <div class="layer">
+      <div class="layer-header">
+        <input type="checkbox">
+        <div style="cursor:grab;color:#555">&#x2630;</div>
+        <div class="layer-color" style="background:#1a1a1a"></div>
+        <div class="layer-name" style="color:#555;text-decoration:line-through">Contorno running (desactivado)</div>
+        <div class="layer-tags">
+          <div class="layer-tag" style="opacity:0.5">running</div>
+        </div>
+        <div style="color:#555;font-size:18px;cursor:pointer">&#9660;</div>
+      </div>
+    </div>
+
+  </div>
+
+  <hr class="separator">
+
+  <!-- Config global -->
+  <div style="max-width:900px">
+    <h3 style="font-size:14px;margin-bottom:12px">Configuracion global (aplica a todas las capas)</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="layer-field">
+        <label>Perfil base</label>
+        <select><option>Camisa / Algodon</option><option>Gorra</option><option>Chamarra</option><option selected>Personalizado</option></select>
+      </div>
+      <div class="layer-field">
+        <label>Umbral TRIM (mm)</label>
+        <input type="number" value="3.0" step="0.5">
+      </div>
+      <div class="layer-field">
+        <label>Tie-in puntadas</label>
+        <input type="number" value="3" min="2" max="5">
+      </div>
+      <div class="layer-field">
+        <label>Orden de capas</label>
+        <select><option selected>Fills → Satins → Contornos</option><option>Manual (arrastra arriba)</option><option>Concentrico (gorra)</option></select>
+      </div>
+      <div class="layer-field">
+        <label>Colores</label>
+        <select><option selected>Claros primero</option><option>Oscuros primero</option><option>Manual</option></select>
+      </div>
+      <div class="layer-field">
+        <label>Estabilizador</label>
+        <select><option selected>Tear-away</option><option>Cut-away</option><option>Wash-away</option></select>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:24px;display:flex;gap:10px">
+    <button class="btn-sm btn-purple" style="padding:10px 24px;font-size:14px">Generar archivo de bordado</button>
+    <button class="btn-sm btn-outline" style="padding:10px 24px;font-size:14px">Guardar como template</button>
+    <button class="btn-sm btn-outline" style="padding:10px 24px;font-size:14px">Vista previa simulacion</button>
+  </div>
+</div>
+
+<script>
+function showTab(name) {
+  document.querySelectorAll('.content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).style.display = 'block';
+  event.target.classList.add('active');
+}
+
+// Toggle cards open/close
+document.querySelectorAll('.card-header').forEach(header => {
+  header.addEventListener('click', (e) => {
+    if (e.target.classList.contains('card-toggle')) return;
+    header.closest('.card').classList.toggle('open');
+  });
+});
+
+// Toggle layers open/close
+document.querySelectorAll('.layer-header').forEach(header => {
+  header.addEventListener('click', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    const body = header.nextElementSibling;
+    if (body && body.classList.contains('layer-body')) {
+      body.style.display = body.style.display === 'none' ? 'grid' : 'none';
+    }
+  });
+});
+</script>
+
+</body>
+</html>
